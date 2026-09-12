@@ -31,7 +31,6 @@ These environment variables are specified using the [balenaCloud dashboard](http
 | `loopDepartureInterval` | `10` (seconds between rotating the lower two rows to the next pair of departures)
 | `lastLineText` | `****Last Line****` (end-of-list marker shown centered in ADS-B and Plane-Alert lower rows)
 | `targetFPS` | `20` (Frame rate regulator FPS target; 0 disables the regulator, which will increase FPS on constrained CPU, but will run the CPU hot at 100%.)
-| `scrollPixelsPerSecond` | `25` (scroll speed in pixels per second; increase for faster movement or decrease for slower movement, minimum `1`)
 | `debug` | `False` (Display debugging information; `True` shows the debug info permanently, any integer `>1` will show instead of the splash screen for that number of seconds)
 
 ## ADS-B aircraft mode (optional)

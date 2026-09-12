@@ -74,7 +74,6 @@ data:
     - showDepartureNumbers: False
     - firstDepartureBold: True
     - targetFPS: 70
-    - scrollPixelsPerSecond: 25
     - fpsTime: 10
     - debug: False
     - adsbEnabled: False

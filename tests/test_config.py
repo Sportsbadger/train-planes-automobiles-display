@@ -10,7 +10,6 @@ from config import loadConfig  # noqa: E402
 def test_adsb_config_defaults_to_disabled_train_only(monkeypatch):
     for key in [
         "adsbEnabled",
-        "scrollPixelsPerSecond",
         "transportModes",
         "modeSwitchInterval",
         "modeRunCount",
@@ -46,7 +45,6 @@ def test_adsb_config_defaults_to_disabled_train_only(monkeypatch):
     config = loadConfig()
 
     assert config["adsb"]["enabled"] is False
-    assert config["scrollPixelsPerSecond"] == 25.0
     assert config["transport"]["modes"] == "train"
     assert config["transport"]["modeSwitchInterval"] == 300
     assert config["transport"]["modeRunCount"] is None

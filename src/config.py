@@ -120,11 +120,6 @@ def loadConfig():
     }
 
     data["targetFPS"] = int(os.getenv("targetFPS") or 70)
-    data["scrollPixelsPerSecond"] = _env_float(
-        "scrollPixelsPerSecond",
-        25.0,
-        minimum=1.0,
-    )
     data["refreshTime"] = int(os.getenv("refreshTime") or 180)
     data["fpsTime"] = int(os.getenv("fpsTime") or 180)
     data["screenRotation"] = int(os.getenv("screenRotation") or 2)

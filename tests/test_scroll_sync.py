@@ -1,8 +1,6 @@
 from pathlib import Path
 import sys
 
-import pytest
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT / "src"))
 
@@ -11,8 +9,6 @@ from scroll_sync import (  # noqa: E402
     STATS_SCROLL_REQUIRED_CYCLES,
     ScrollCompletion,
     mode_scroll_required_cycles,
-    scroll_cycle_duration_s,
-    scroll_frame,
 )
 
 
@@ -47,44 +43,3 @@ def test_mode_scroll_required_cycles_scrolls_stats_once():
     )
     assert mode_scroll_required_cycles("adsb") == SCROLL_REQUIRED_CYCLES
     assert mode_scroll_required_cycles("plane-alert") == SCROLL_REQUIRED_CYCLES
-
-
-def test_scroll_frame_uses_elapsed_time_after_delayed_render():
-    frame = scroll_frame(
-        1.5,
-        text_width=100,
-        text_height=10,
-        initial_pause_frames=10,
-    )
-
-    assert frame.x == -22
-    assert frame.y == 0
-    assert frame.visible is True
-
-
-def test_scroll_frame_reports_completed_cycles():
-    duration = scroll_cycle_duration_s(100, 10, 10)
-
-    frame = scroll_frame(duration * 2 + 0.1, 100, 10, 10)
-
-    assert frame.completed_cycles == 2
-    assert frame.x == 0
-    assert frame.y == 8
-
-
-def test_scroll_cycle_duration_requires_positive_frame_interval():
-    with pytest.raises(ValueError, match="frame_interval_s"):
-        scroll_cycle_duration_s(100, 10, 10, frame_interval_s=0.0)
-
-
-def test_scroll_cycle_duration_requires_positive_speed():
-    with pytest.raises(ValueError, match="pixels_per_second"):
-        scroll_cycle_duration_s(100, 10, 10, pixels_per_second=0.0)
-
-
-def test_scroll_speed_is_configurable():
-    normal = scroll_frame(1.0, 100, 10, 10, pixels_per_second=25.0)
-    faster = scroll_frame(1.0, 100, 10, 10, pixels_per_second=50.0)
-
-    assert normal.x == -10
-    assert faster.x == -30

@@ -59,12 +59,9 @@ from transport_modes import (
 )
 from refresh_cache import AsyncRefreshCache
 from scroll_sync import (
-    DEFAULT_SCROLL_PIXELS_PER_SECOND,
     SCROLL_REQUIRED_CYCLES,
     ScrollCompletion,
     mode_scroll_required_cycles,
-    scroll_cycle_duration_s,
-    scroll_frame,
 )
 
 import RPi.GPIO as GPIO
@@ -222,12 +219,6 @@ def max_mode_scroll_duration_s(
         scroll_animation_duration_s(
             text,
             frame_interval_s=effective_scroll_frame_interval_s(app_config),
-            pixels_per_second=float(
-                app_config.get(
-                    "scrollPixelsPerSecond",
-                    DEFAULT_SCROLL_PIXELS_PER_SECOND,
-                )
-            ),
             cycles=mode_scroll_required_cycles(mode),
         )
         for text in scroll_texts
@@ -277,7 +268,6 @@ def scroll_animation_duration_s(
     initial_pause_frames: int = 50,
     final_pause_frames: int = 8,
     frame_interval_s: float = SCROLL_SNAPSHOT_INTERVAL_S,
-    pixels_per_second: float = DEFAULT_SCROLL_PIXELS_PER_SECOND,
     cycles: int = SCROLL_REQUIRED_CYCLES,
     viewport_width: int = SCROLL_EXIT_VIEWPORT_WIDTH,
 ) -> float:
@@ -286,16 +276,15 @@ def scroll_animation_duration_s(
         return 0.0
 
     text_width, text_height, _bitmap = cachedBitmapText(text, font)
-    cycle_duration_s = scroll_cycle_duration_s(
-        text_width + max(0, viewport_width),
-        text_height,
-        initial_pause_frames,
-        final_pause_frames=final_pause_frames,
-        frame_interval_s=frame_interval_s,
-        pixels_per_second=pixels_per_second,
+    frames = (
+        text_height
+        + max(0, initial_pause_frames)
+        + text_width
+        + max(0, viewport_width)
+        + max(0, final_pause_frames)
+        + SCROLL_CYCLE_SAFETY_FRAMES
     )
-    safety_duration_s = SCROLL_CYCLE_SAFETY_FRAMES * frame_interval_s
-    return (cycle_duration_s + safety_duration_s) * max(1, cycles)
+    return frames * frame_interval_s * max(1, cycles)
 
 
 def mode_entry_count(
@@ -328,39 +317,50 @@ def renderStations(
     stations,
     initial_pause_frames=20,
     completion: ScrollCompletion | None = None,
-    clock: Callable[[], float] = time.monotonic,
 ):
+    pixels_left = 1
+    pixels_up = 0
+    has_elevated = False
+    pause_count = 0
     txt_width, txt_height, bitmap = cachedBitmapText(stations, font)
-    started_at = clock()
-    reported_cycles = 0
 
     def drawText(draw, *_):
-        nonlocal reported_cycles
+        nonlocal pixels_left, pixels_up, has_elevated, pause_count
 
         if completion is not None and completion.complete:
             return
 
-        frame = scroll_frame(
-            clock() - started_at,
-            txt_width,
-            txt_height,
-            initial_pause_frames,
-            frame_interval_s=SCROLL_SNAPSHOT_INTERVAL_S,
-            pixels_per_second=float(
-                config.get(
-                    "scrollPixelsPerSecond",
-                    DEFAULT_SCROLL_PIXELS_PER_SECOND,
-                )
-            ),
-        )
-        while reported_cycles < frame.completed_cycles:
-            reported_cycles += 1
-            if completion is not None:
-                completion.mark_cycle_complete()
-                if completion.complete:
-                    return
-        if frame.visible:
-            draw.bitmap((frame.x, frame.y), bitmap, fill="yellow")
+        if has_elevated:
+            # slide the bitmap left until it's fully out of view
+            draw.bitmap((pixels_left - 1, 0), bitmap, fill="yellow")
+            if -pixels_left > txt_width:
+                pause_count += 1
+                if pause_count >= 8:
+                    if completion is not None:
+                        completion.mark_cycle_complete()
+                        if completion.complete:
+                            return
+                    pixels_left = 1
+                    pixels_up = 0
+                    has_elevated = False
+                    pause_count = 0
+                return
+
+            pause_count = 0
+            pixels_left -= 1
+            return
+
+        # slide the bitmap up from the bottom of its viewport until fully visible
+        draw.bitmap((0, txt_height - pixels_up), bitmap, fill="yellow")
+        if pixels_up >= txt_height:
+            pause_count += 1
+            if pause_count > initial_pause_frames:
+                has_elevated = True
+                pixels_up = 0
+                pause_count = 0
+            return
+
+        pixels_up += 1
 
     return drawText
 
