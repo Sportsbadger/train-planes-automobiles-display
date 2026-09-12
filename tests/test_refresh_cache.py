@@ -68,3 +68,29 @@ def test_refresh_interval_must_be_positive() -> None:
     with ThreadPoolExecutor(max_workers=1) as executor:
         with pytest.raises(ValueError, match="refresh_interval_s"):
             AsyncRefreshCache(lambda: "ready", 0.0, executor)
+
+
+def test_refresh_if_stale_reuses_recent_value() -> None:
+    calls = 0
+
+    def load_value() -> str:
+        nonlocal calls
+        calls += 1
+        return f"value-{calls}"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        cache = AsyncRefreshCache(load_value, 10.0, executor)
+        cache.refresh_if_stale(0.0, 5.0)
+        executor.shutdown(wait=True)
+        assert cache.snapshot(1.0).value == "value-1"
+
+        cache.refresh_if_stale(3.0, 5.0)
+
+    assert calls == 1
+
+
+def test_refresh_if_stale_validates_maximum_age() -> None:
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        cache = AsyncRefreshCache(lambda: "ready", 10.0, executor)
+        with pytest.raises(ValueError, match="maximum_age_s"):
+            cache.refresh_if_stale(0.0, -1.0)

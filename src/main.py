@@ -62,6 +62,7 @@ from scroll_sync import (
     SCROLL_REQUIRED_CYCLES,
     ScrollCompletion,
     mode_scroll_required_cycles,
+    scroll_frame,
 )
 
 import RPi.GPIO as GPIO
@@ -317,50 +318,33 @@ def renderStations(
     stations,
     initial_pause_frames=20,
     completion: ScrollCompletion | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ):
-    pixels_left = 1
-    pixels_up = 0
-    has_elevated = False
-    pause_count = 0
     txt_width, txt_height, bitmap = cachedBitmapText(stations, font)
+    started_at = clock()
+    reported_cycles = 0
 
     def drawText(draw, *_):
-        nonlocal pixels_left, pixels_up, has_elevated, pause_count
+        nonlocal reported_cycles
 
         if completion is not None and completion.complete:
             return
 
-        if has_elevated:
-            # slide the bitmap left until it's fully out of view
-            draw.bitmap((pixels_left - 1, 0), bitmap, fill="yellow")
-            if -pixels_left > txt_width:
-                pause_count += 1
-                if pause_count >= 8:
-                    if completion is not None:
-                        completion.mark_cycle_complete()
-                        if completion.complete:
-                            return
-                    pixels_left = 1
-                    pixels_up = 0
-                    has_elevated = False
-                    pause_count = 0
-                return
-
-            pause_count = 0
-            pixels_left -= 1
-            return
-
-        # slide the bitmap up from the bottom of its viewport until fully visible
-        draw.bitmap((0, txt_height - pixels_up), bitmap, fill="yellow")
-        if pixels_up >= txt_height:
-            pause_count += 1
-            if pause_count > initial_pause_frames:
-                has_elevated = True
-                pixels_up = 0
-                pause_count = 0
-            return
-
-        pixels_up += 1
+        frame = scroll_frame(
+            clock() - started_at,
+            txt_width,
+            txt_height,
+            initial_pause_frames,
+            frame_interval_s=SCROLL_SNAPSHOT_INTERVAL_S,
+        )
+        while reported_cycles < frame.completed_cycles:
+            reported_cycles += 1
+            if completion is not None:
+                completion.mark_cycle_complete()
+                if completion.complete:
+                    return
+        if frame.visible:
+            draw.bitmap((frame.x, frame.y), bitmap, fill="yellow")
 
     return drawText
 
@@ -1389,7 +1373,7 @@ def drawPlaneAlertSignage(
             width,
             loop_block_height,
             render_plane_alert_loop_block(),
-            interval=loop_frame_interval,
+            interval=STATIC_SNAPSHOT_INTERVAL_S,
         )
 
     rowTime = snapshot(
@@ -1479,7 +1463,7 @@ def prefetch_modes_for_next_cycle(
     if next_mode is None or next_mode not in caches:
         return
 
-    caches[next_mode].refresh_if_due(now, force=True)
+    caches[next_mode].refresh_if_stale(now, PREFETCH_LEAD_TIME_S)
 
 
 def draw_cached_train_signage(
@@ -1612,7 +1596,10 @@ try:
             refreshExecutor,
         )
 
-    initial_refresh_modes = set(transportModes + [config["transport"]["fallbackMode"]])
+    initial_refresh_modes = {
+        modeState.active_mode,
+        config["transport"]["fallbackMode"],
+    }
     if "adsb-records" in initial_refresh_modes:
         initial_refresh_modes.add("adsb")
     for cache_mode in initial_refresh_modes:
@@ -1698,9 +1685,9 @@ try:
                     syncedEntryIndex = 0
                     active_snapshot = None
                     if modeState.active_mode in displayCaches:
-                        displayCaches[modeState.active_mode].refresh_if_due(
+                        displayCaches[modeState.active_mode].refresh_if_stale(
                             now_monotonic,
-                            force=True,
+                            PREFETCH_LEAD_TIME_S,
                         )
                         active_cache = displayCaches[modeState.active_mode]
                         active_snapshot = active_cache.snapshot(now_monotonic).value
