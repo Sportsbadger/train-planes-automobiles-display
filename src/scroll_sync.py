@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 
 SCROLL_FRAME_INTERVAL_S = 0.02
+DEFAULT_SCROLL_PIXELS_PER_SECOND = 25.0
 
 SCROLL_REQUIRED_CYCLES = 2
 STATS_SCROLL_REQUIRED_CYCLES = 1
@@ -26,6 +27,7 @@ def scroll_cycle_duration_s(
     *,
     final_pause_frames: int = 8,
     frame_interval_s: float = SCROLL_FRAME_INTERVAL_S,
+    pixels_per_second: float = DEFAULT_SCROLL_PIXELS_PER_SECOND,
 ) -> float:
     """Return the duration of one complete scroll cycle.
 
@@ -35,19 +37,25 @@ def scroll_cycle_duration_s(
         initial_pause_frames: Frames to hold after the vertical entrance.
         final_pause_frames: Frames to hold after the text exits left.
         frame_interval_s: Nominal duration of one animation frame.
+        pixels_per_second: Horizontal and vertical movement speed.
 
     Returns:
         Complete cycle duration in seconds.
 
     Raises:
-        ValueError: If the frame interval is not positive.
+        ValueError: If the frame interval or movement speed is not positive.
     """
     if frame_interval_s <= 0:
         raise ValueError("frame_interval_s must be greater than zero")
+    if pixels_per_second <= 0:
+        raise ValueError("pixels_per_second must be greater than zero")
 
     moving_frames = max(0, text_height) + max(0, text_width) + 2
     pause_frames = max(0, initial_pause_frames) + max(0, final_pause_frames)
-    return (moving_frames + pause_frames) * frame_interval_s
+    return (
+        moving_frames / pixels_per_second
+        + pause_frames * frame_interval_s
+    )
 
 
 def scroll_frame(
@@ -58,6 +66,7 @@ def scroll_frame(
     *,
     final_pause_frames: int = 8,
     frame_interval_s: float = SCROLL_FRAME_INTERVAL_S,
+    pixels_per_second: float = DEFAULT_SCROLL_PIXELS_PER_SECOND,
 ) -> ScrollFrame:
     """Calculate a scroll position from elapsed time.
 
@@ -70,13 +79,14 @@ def scroll_frame(
         initial_pause_frames,
         final_pause_frames=final_pause_frames,
         frame_interval_s=frame_interval_s,
+        pixels_per_second=pixels_per_second,
     )
     elapsed = max(0.0, elapsed_s)
     completed_cycles = int(elapsed / cycle_duration)
     cycle_elapsed = elapsed % cycle_duration
-    vertical_duration = max(0, text_height) * frame_interval_s
+    vertical_duration = max(0, text_height) / pixels_per_second
     if cycle_elapsed < vertical_duration:
-        pixels_up = int((cycle_elapsed + 1e-9) / frame_interval_s)
+        pixels_up = int((cycle_elapsed + 1e-9) * pixels_per_second)
         return ScrollFrame(0, text_height - pixels_up, completed_cycles, True)
 
     pause_duration = max(0, initial_pause_frames) * frame_interval_s
@@ -84,10 +94,10 @@ def scroll_frame(
         return ScrollFrame(0, 0, completed_cycles, True)
 
     horizontal_elapsed = cycle_elapsed - vertical_duration - pause_duration
-    horizontal_frames = max(0, text_width) + 2
-    if horizontal_elapsed < horizontal_frames * frame_interval_s:
+    horizontal_pixels = max(0, text_width) + 2
+    if horizontal_elapsed < horizontal_pixels / pixels_per_second:
         return ScrollFrame(
-            -int((horizontal_elapsed + 1e-9) / frame_interval_s),
+            -int((horizontal_elapsed + 1e-9) * pixels_per_second),
             0,
             completed_cycles,
             True,

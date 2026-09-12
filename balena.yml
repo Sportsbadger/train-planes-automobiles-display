@@ -74,6 +74,7 @@ data:
     - showDepartureNumbers: False
     - firstDepartureBold: True
     - targetFPS: 70
+    - scrollPixelsPerSecond: 25
     - fpsTime: 10
     - debug: False
     - adsbEnabled: False
@@ -89,4 +90,3 @@ data:
     - planeAlertDisplayCount: 30
     - planeAlertTimeOffset: 0
 version: 0.6.2
-

@@ -57,7 +57,7 @@ def test_scroll_frame_uses_elapsed_time_after_delayed_render():
         initial_pause_frames=10,
     )
 
-    assert frame.x == -55
+    assert frame.x == -22
     assert frame.y == 0
     assert frame.visible is True
 
@@ -69,9 +69,22 @@ def test_scroll_frame_reports_completed_cycles():
 
     assert frame.completed_cycles == 2
     assert frame.x == 0
-    assert frame.y == 5
+    assert frame.y == 8
 
 
 def test_scroll_cycle_duration_requires_positive_frame_interval():
     with pytest.raises(ValueError, match="frame_interval_s"):
         scroll_cycle_duration_s(100, 10, 10, frame_interval_s=0.0)
+
+
+def test_scroll_cycle_duration_requires_positive_speed():
+    with pytest.raises(ValueError, match="pixels_per_second"):
+        scroll_cycle_duration_s(100, 10, 10, pixels_per_second=0.0)
+
+
+def test_scroll_speed_is_configurable():
+    normal = scroll_frame(1.0, 100, 10, 10, pixels_per_second=25.0)
+    faster = scroll_frame(1.0, 100, 10, 10, pixels_per_second=50.0)
+
+    assert normal.x == -10
+    assert faster.x == -30
