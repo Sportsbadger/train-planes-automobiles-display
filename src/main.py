@@ -178,7 +178,9 @@ adsbLoopPixelsUp = 0
 adsbLoopPauseCount = 0
 adsbLoopHasElevated = 0
 CACHE_REFRESH_CHECK_INTERVAL_S = 1.0
-PREFETCH_LEAD_TIME_S = 5.0
+# ADS-B can spend up to six seconds in sequential aircraft and route requests.
+# Leave additional time for parsing and record-store persistence before rendering.
+PREFETCH_LEAD_TIME_S = 10.0
 PLANE_ENTRY_SCROLL_MULTIPLIER = 2.0
 STATIC_SNAPSHOT_INTERVAL_S = 0.5
 SCROLL_SNAPSHOT_INTERVAL_S = 0.02
@@ -1479,7 +1481,13 @@ def prefetch_modes_for_next_cycle(
     if next_mode is None or next_mode not in caches:
         return
 
-    caches[next_mode].refresh_if_stale(now, PREFETCH_LEAD_TIME_S)
+    next_cache = caches[next_mode]
+    # Refresh early when the value will become stale before the mode switch.
+    prefetch_maximum_age_s = max(
+        0.0,
+        next_cache.refresh_interval_s - PREFETCH_LEAD_TIME_S,
+    )
+    next_cache.refresh_if_stale(now, prefetch_maximum_age_s)
 
 
 def draw_cached_train_signage(
@@ -1701,11 +1709,11 @@ try:
                     syncedEntryIndex = 0
                     active_snapshot = None
                     if modeState.active_mode in displayCaches:
-                        displayCaches[modeState.active_mode].refresh_if_stale(
-                            now_monotonic,
-                            PREFETCH_LEAD_TIME_S,
-                        )
                         active_cache = displayCaches[modeState.active_mode]
+                        active_cache.refresh_if_stale(
+                            now_monotonic,
+                            active_cache.refresh_interval_s,
+                        )
                         active_snapshot = active_cache.snapshot(now_monotonic).value
                 elif (
                     modeState.active_mode in SCROLL_SYNCED_MODES

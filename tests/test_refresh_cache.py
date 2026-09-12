@@ -70,6 +70,13 @@ def test_refresh_interval_must_be_positive() -> None:
             AsyncRefreshCache(lambda: "ready", 0.0, executor)
 
 
+def test_refresh_interval_is_available_for_prefetch_policy() -> None:
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        cache = AsyncRefreshCache(lambda: "ready", 30.0, executor)
+
+        assert cache.refresh_interval_s == 30.0
+
+
 def test_refresh_if_stale_reuses_recent_value() -> None:
     calls = 0
 

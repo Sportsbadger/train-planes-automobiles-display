@@ -52,6 +52,11 @@ class AsyncRefreshCache(Generic[T]):
         self._last_success_monotonic: float | None = None
         self._last_error: Exception | None = None
 
+    @property
+    def refresh_interval_s(self) -> float:
+        """Return the configured minimum interval between refresh attempts."""
+        return self._refresh_interval_s
+
     def refresh_if_due(self, now: float, *, force: bool = False) -> None:
         """Start a background refresh if no refresh is active and one is due.
 
