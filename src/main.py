@@ -58,6 +58,7 @@ from transport_modes import (
     update_mode_state,
 )
 from refresh_cache import AsyncRefreshCache
+from bitmap_cache import BitmapTextCache
 from scroll_sync import (
     SCROLL_REQUIRED_CYCLES,
     ScrollCompletion,
@@ -140,31 +141,11 @@ def renderCallingAt(draw, *_):
     draw.bitmap((0, 0), bitmap, fill="yellow")
 
 
-bitmapRenderCache = {}
+bitmapRenderCache = BitmapTextCache(max_entries=512)
 
 
 def cachedBitmapText(text, font):
-    # cache the bitmap representation of the stations string
-    nameTuple = font.getname()
-    fontKey = ''
-    for item in nameTuple:
-        fontKey = fontKey + item
-    key = text + fontKey
-    if key in bitmapRenderCache:
-        # found in cache; re-use it
-        pre = bitmapRenderCache[key]
-        bitmap = pre['bitmap']
-        txt_width = pre['txt_width']
-        txt_height = pre['txt_height']
-    else:
-        # not cached; create a new image containing the string as a monochrome bitmap
-        _, _, txt_width, txt_height = font.getbbox(text)
-        bitmap = Image.new('L', [txt_width, txt_height], color=0)
-        pre_render_draw = ImageDraw.Draw(bitmap)
-        pre_render_draw.text((0, 0), text=text, font=font, fill=255)
-        # save to render cache
-        bitmapRenderCache[key] = {'bitmap': bitmap, 'txt_width': txt_width, 'txt_height': txt_height}
-    return txt_width, txt_height, bitmap
+    return bitmapRenderCache.get(text, font)
 
 
 pixelsLeft = 1
@@ -182,7 +163,7 @@ CACHE_REFRESH_CHECK_INTERVAL_S = 1.0
 # Leave additional time for parsing and record-store persistence before rendering.
 PREFETCH_LEAD_TIME_S = 10.0
 PLANE_ENTRY_SCROLL_MULTIPLIER = 2.0
-STATIC_SNAPSHOT_INTERVAL_S = 0.5
+STATIC_SNAPSHOT_INTERVAL_S = 60.0
 SCROLL_SNAPSHOT_INTERVAL_S = 0.02
 SCROLL_CYCLE_SAFETY_FRAMES = 5
 SCROLL_EXIT_VIEWPORT_WIDTH = 256
