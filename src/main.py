@@ -58,6 +58,7 @@ from transport_modes import (
     update_mode_state,
 )
 from refresh_cache import AsyncRefreshCache
+from bitmap_cache import BitmapTextCache
 from scroll_sync import (
     SCROLL_REQUIRED_CYCLES,
     ScrollCompletion,
@@ -140,31 +141,11 @@ def renderCallingAt(draw, *_):
     draw.bitmap((0, 0), bitmap, fill="yellow")
 
 
-bitmapRenderCache = {}
+bitmapRenderCache = BitmapTextCache(max_entries=512)
 
 
 def cachedBitmapText(text, font):
-    # cache the bitmap representation of the stations string
-    nameTuple = font.getname()
-    fontKey = ''
-    for item in nameTuple:
-        fontKey = fontKey + item
-    key = text + fontKey
-    if key in bitmapRenderCache:
-        # found in cache; re-use it
-        pre = bitmapRenderCache[key]
-        bitmap = pre['bitmap']
-        txt_width = pre['txt_width']
-        txt_height = pre['txt_height']
-    else:
-        # not cached; create a new image containing the string as a monochrome bitmap
-        _, _, txt_width, txt_height = font.getbbox(text)
-        bitmap = Image.new('L', [txt_width, txt_height], color=0)
-        pre_render_draw = ImageDraw.Draw(bitmap)
-        pre_render_draw.text((0, 0), text=text, font=font, fill=255)
-        # save to render cache
-        bitmapRenderCache[key] = {'bitmap': bitmap, 'txt_width': txt_width, 'txt_height': txt_height}
-    return txt_width, txt_height, bitmap
+    return bitmapRenderCache.get(text, font)
 
 
 pixelsLeft = 1
@@ -178,9 +159,11 @@ adsbLoopPixelsUp = 0
 adsbLoopPauseCount = 0
 adsbLoopHasElevated = 0
 CACHE_REFRESH_CHECK_INTERVAL_S = 1.0
-PREFETCH_LEAD_TIME_S = 5.0
+# ADS-B can spend up to six seconds in sequential aircraft and route requests.
+# Leave additional time for parsing and record-store persistence before rendering.
+PREFETCH_LEAD_TIME_S = 10.0
 PLANE_ENTRY_SCROLL_MULTIPLIER = 2.0
-STATIC_SNAPSHOT_INTERVAL_S = 0.5
+STATIC_SNAPSHOT_INTERVAL_S = 60.0
 SCROLL_SNAPSHOT_INTERVAL_S = 0.02
 SCROLL_CYCLE_SAFETY_FRAMES = 5
 SCROLL_EXIT_VIEWPORT_WIDTH = 256
@@ -1389,7 +1372,7 @@ def drawPlaneAlertSignage(
             width,
             loop_block_height,
             render_plane_alert_loop_block(),
-            interval=loop_frame_interval,
+            interval=STATIC_SNAPSHOT_INTERVAL_S,
         )
 
     rowTime = snapshot(
@@ -1479,7 +1462,13 @@ def prefetch_modes_for_next_cycle(
     if next_mode is None or next_mode not in caches:
         return
 
-    caches[next_mode].refresh_if_due(now, force=True)
+    next_cache = caches[next_mode]
+    # Refresh early when the value will become stale before the mode switch.
+    prefetch_maximum_age_s = max(
+        0.0,
+        next_cache.refresh_interval_s - PREFETCH_LEAD_TIME_S,
+    )
+    next_cache.refresh_if_stale(now, prefetch_maximum_age_s)
 
 
 def draw_cached_train_signage(
@@ -1612,7 +1601,10 @@ try:
             refreshExecutor,
         )
 
-    initial_refresh_modes = set(transportModes + [config["transport"]["fallbackMode"]])
+    initial_refresh_modes = {
+        modeState.active_mode,
+        config["transport"]["fallbackMode"],
+    }
     if "adsb-records" in initial_refresh_modes:
         initial_refresh_modes.add("adsb")
     for cache_mode in initial_refresh_modes:
@@ -1698,11 +1690,11 @@ try:
                     syncedEntryIndex = 0
                     active_snapshot = None
                     if modeState.active_mode in displayCaches:
-                        displayCaches[modeState.active_mode].refresh_if_due(
-                            now_monotonic,
-                            force=True,
-                        )
                         active_cache = displayCaches[modeState.active_mode]
+                        active_cache.refresh_if_stale(
+                            now_monotonic,
+                            active_cache.refresh_interval_s,
+                        )
                         active_snapshot = active_cache.snapshot(now_monotonic).value
                 elif (
                     modeState.active_mode in SCROLL_SYNCED_MODES

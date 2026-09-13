@@ -52,6 +52,11 @@ class AsyncRefreshCache(Generic[T]):
         self._last_success_monotonic: float | None = None
         self._last_error: Exception | None = None
 
+    @property
+    def refresh_interval_s(self) -> float:
+        """Return the configured minimum interval between refresh attempts."""
+        return self._refresh_interval_s
+
     def refresh_if_due(self, now: float, *, force: bool = False) -> None:
         """Start a background refresh if no refresh is active and one is due.
 
@@ -82,6 +87,30 @@ class AsyncRefreshCache(Generic[T]):
                 last_success_monotonic=self._last_success_monotonic,
                 last_error=self._last_error,
             )
+
+    def refresh_if_stale(self, now: float, maximum_age_s: float) -> None:
+        """Refresh when no usable value exists or its age exceeds a limit.
+
+        Args:
+            now: Current monotonic timestamp.
+            maximum_age_s: Maximum acceptable age of the current value.
+        """
+        if maximum_age_s < 0:
+            raise ValueError("maximum_age_s must not be negative")
+
+        with self._lock:
+            self._collect_completed_locked(now)
+            if self._future is not None:
+                return
+            is_stale = (
+                self._value is None
+                or self._last_success_monotonic is None
+                or now - self._last_success_monotonic >= maximum_age_s
+            )
+            if not is_stale:
+                return
+            self._last_attempt_monotonic = now
+            self._future = self._executor.submit(self._loader)
 
     def _is_due_locked(self, now: float) -> bool:
         if self._last_attempt_monotonic is None:
