@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 from dataclasses import dataclass, replace
 from math import atan2, cos, radians, sin, sqrt
 from typing import Any, Mapping, Sequence
@@ -273,7 +274,7 @@ def parse_aircraft(
         for item in aircraft
         if _passes_filters(item, max_age_s, max_distance_nm, min_altitude_ft)
     ]
-    return sorted(filtered, key=lambda item: item.distance_nm)[:limit]
+    return heapq.nsmallest(limit, filtered, key=lambda item: item.distance_nm)
 
 
 def select_featured_aircraft_index(

@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
@@ -93,6 +94,29 @@ def test_refresh_if_stale_reuses_recent_value() -> None:
 
         cache.refresh_if_stale(3.0, 5.0)
 
+    assert calls == 1
+
+
+def test_refresh_if_stale_reuses_in_flight_prefetch() -> None:
+    calls = 0
+    release_loader = Event()
+
+    def load_value() -> str:
+        nonlocal calls
+        calls += 1
+        release_loader.wait(timeout=1.0)
+        return "ready"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        cache = AsyncRefreshCache(load_value, 10.0, executor)
+        cache.refresh_if_stale(0.0, 5.0)
+        cache.refresh_if_stale(10.0, 5.0)
+        release_loader.set()
+        executor.shutdown(wait=True)
+
+        snapshot = cache.snapshot(11.0)
+
+    assert snapshot.value == "ready"
     assert calls == 1
 
 

@@ -1765,7 +1765,14 @@ try:
                     active_snapshot = None
                     if modeState.active_mode in displayCaches:
                         active_cache = displayCaches[modeState.active_mode]
-                        active_cache.refresh_if_due(now_monotonic, force=True)
+                        # Reuse a recent prefetch instead of immediately issuing
+                        # the same request again at the mode boundary. If the
+                        # prefetch is still active, refresh_if_stale leaves it
+                        # running and the intermission waits for its result.
+                        active_cache.refresh_if_stale(
+                            now_monotonic,
+                            PREFETCH_LEAD_TIME_S,
+                        )
                         active_snapshot = active_cache.snapshot(now_monotonic).value
                         intermissionState = IntermissionState(
                             target_mode=modeState.active_mode,

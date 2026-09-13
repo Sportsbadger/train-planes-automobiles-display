@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import heapq
 import io
 import json
 from dataclasses import dataclass
@@ -287,7 +288,7 @@ def parse_plane_alerts(
         for alert in _dedupe_alerts(sortable_rows)
         if _passes_age_filter(alert, max_age_hours, now)
     ]
-    return sorted(filtered, key=_plane_alert_sort_key, reverse=True)[:limit]
+    return heapq.nlargest(limit, filtered, key=_plane_alert_sort_key)
 
 
 def _apply_time_offset(alert: PlaneAlert, offset_hours: float) -> PlaneAlert:
