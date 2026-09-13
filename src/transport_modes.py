@@ -13,6 +13,35 @@ class ModeState:
     last_switch: float
 
 
+@dataclass(frozen=True)
+class IntermissionState:
+    """Tracks a mode transition while the next mode prepares its data."""
+
+    target_mode: str
+    started_at: float
+
+
+def intermission_is_complete(
+    state: IntermissionState,
+    now: float,
+    minimum_duration_s: float,
+    data_is_refreshing: bool,
+) -> bool:
+    """Return whether an intermode loading screen can be dismissed.
+
+    Args:
+        state: Active intermission state.
+        now: Current monotonic timestamp.
+        minimum_duration_s: Minimum time to show the intermission screen.
+        data_is_refreshing: Whether the target mode still has an active load.
+
+    Returns:
+        ``True`` once the minimum display time and target refresh are complete.
+    """
+    elapsed_s = now - state.started_at
+    return elapsed_s >= max(0.0, minimum_duration_s) and not data_is_refreshing
+
+
 def parse_modes(
     raw_modes: str,
     adsb_enabled: bool,
