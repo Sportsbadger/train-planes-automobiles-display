@@ -6,11 +6,12 @@ from threading import Lock
 from typing import Callable, Generic, TypeVar
 
 T = TypeVar("T")
+CycleKey = tuple[str, int]
 
 
 @dataclass(frozen=True)
 class CacheSnapshot(Generic[T]):
-    """Current cache state returned to the display loop."""
+    """Current published cache state returned to the display loop."""
 
     value: T | None
     is_refreshing: bool
@@ -19,12 +20,7 @@ class CacheSnapshot(Generic[T]):
 
 
 class AsyncRefreshCache(Generic[T]):
-    """Refresh display data in a background thread and serve the last result.
-
-    The display loop must stay fast enough to keep OLED animations smooth. This
-    cache lets network loaders run off the render path while the UI keeps using
-    the latest completed result.
-    """
+    """Load values asynchronously and publish them only at mode boundaries."""
 
     def __init__(
         self,
@@ -32,12 +28,12 @@ class AsyncRefreshCache(Generic[T]):
         refresh_interval_s: float,
         executor: ThreadPoolExecutor,
     ) -> None:
-        """Create an async refresh cache.
+        """Create an asynchronous mode-cycle cache.
 
         Args:
             loader: Callable that fetches and parses one data source.
-            refresh_interval_s: Minimum seconds between refresh attempts.
-            executor: Shared executor for background network work.
+            refresh_interval_s: Retained source refresh configuration.
+            executor: Shared executor for background work.
         """
         if refresh_interval_s <= 0:
             raise ValueError("refresh_interval_s must be greater than zero")
@@ -47,85 +43,98 @@ class AsyncRefreshCache(Generic[T]):
         self._executor = executor
         self._lock = Lock()
         self._future: Future[T] | None = None
+        self._future_key: CycleKey | None = None
+        self._requested_cycles: set[CycleKey] = set()
+        self._pending_key: CycleKey | None = None
+        self._pending_value: T | None = None
         self._value: T | None = None
-        self._last_attempt_monotonic: float | None = None
         self._last_success_monotonic: float | None = None
         self._last_error: Exception | None = None
 
     @property
     def refresh_interval_s(self) -> float:
-        """Return the configured minimum interval between refresh attempts."""
+        """Return the configured source refresh interval."""
         return self._refresh_interval_s
 
-    def refresh_if_due(self, now: float, *, force: bool = False) -> None:
-        """Start a background refresh if no refresh is active and one is due.
+    @property
+    def active_future(self) -> Future[T] | None:
+        """Return the currently running future, if any."""
+        with self._lock:
+            self._collect_completed_locked()
+            return self._future
+
+    def start_refresh(
+        self,
+        mode: str,
+        cycle_id: int,
+        *,
+        after: Future[object] | None = None,
+    ) -> Future[T] | None:
+        """Start at most one load for a mode-cycle pair.
 
         Args:
-            now: Current monotonic timestamp.
-            force: Start immediately regardless of the refresh interval.
+            mode: Mode whose upcoming entry will consume the value.
+            cycle_id: Identifier of that upcoming mode entry.
+            after: Optional work which must finish before the loader runs.
+
+        Returns:
+            The submitted future, or ``None`` when rejected as a duplicate or
+            because another refresh is still running.
         """
+        key = (mode, cycle_id)
         with self._lock:
-            self._collect_completed_locked(now)
-            if self._future is not None:
-                return
-            if not force and not self._is_due_locked(now):
-                return
-            self._last_attempt_monotonic = now
-            self._future = self._executor.submit(self._loader)
+            self._collect_completed_locked()
+            if key in self._requested_cycles or self._future is not None:
+                return None
+            self._requested_cycles.add(key)
+            self._future_key = key
+
+            def ordered_load() -> T:
+                if after is not None:
+                    after.result()
+                return self._loader()
+
+            self._future = self._executor.submit(ordered_load)
+            return self._future
+
+    def promote(self, mode: str, cycle_id: int, now: float) -> CacheSnapshot[T]:
+        """Publish a completed result for the specified mode boundary."""
+        key = (mode, cycle_id)
+        with self._lock:
+            self._collect_completed_locked()
+            if self._pending_key == key:
+                self._value = self._pending_value
+                self._pending_key = None
+                self._pending_value = None
+                self._last_success_monotonic = now
+            return self._snapshot_locked()
 
     def snapshot(self, now: float) -> CacheSnapshot[T]:
-        """Return the latest completed value and refresh status.
-
-        Args:
-            now: Current monotonic timestamp.
-        """
+        """Return the published value without publishing completed work."""
+        del now
         with self._lock:
-            self._collect_completed_locked(now)
-            return CacheSnapshot(
-                value=self._value,
-                is_refreshing=self._future is not None,
-                last_success_monotonic=self._last_success_monotonic,
-                last_error=self._last_error,
-            )
+            self._collect_completed_locked()
+            return self._snapshot_locked()
 
-    def refresh_if_stale(self, now: float, maximum_age_s: float) -> None:
-        """Refresh when no usable value exists or its age exceeds a limit.
+    def _snapshot_locked(self) -> CacheSnapshot[T]:
+        return CacheSnapshot(
+            value=self._value,
+            is_refreshing=self._future is not None,
+            last_success_monotonic=self._last_success_monotonic,
+            last_error=self._last_error,
+        )
 
-        Args:
-            now: Current monotonic timestamp.
-            maximum_age_s: Maximum acceptable age of the current value.
-        """
-        if maximum_age_s < 0:
-            raise ValueError("maximum_age_s must not be negative")
-
-        with self._lock:
-            self._collect_completed_locked(now)
-            if self._future is not None:
-                return
-            is_stale = (
-                self._value is None
-                or self._last_success_monotonic is None
-                or now - self._last_success_monotonic >= maximum_age_s
-            )
-            if not is_stale:
-                return
-            self._last_attempt_monotonic = now
-            self._future = self._executor.submit(self._loader)
-
-    def _is_due_locked(self, now: float) -> bool:
-        if self._last_attempt_monotonic is None:
-            return True
-        return now - self._last_attempt_monotonic >= self._refresh_interval_s
-
-    def _collect_completed_locked(self, now: float) -> None:
+    def _collect_completed_locked(self) -> None:
         if self._future is None or not self._future.done():
             return
 
         future = self._future
+        key = self._future_key
         self._future = None
+        self._future_key = None
         try:
-            self._value = future.result()
-            self._last_success_monotonic = now
+            self._pending_value = future.result()
+            self._pending_key = key
             self._last_error = None
         except Exception as err:
             self._last_error = err

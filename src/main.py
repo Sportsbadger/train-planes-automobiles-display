@@ -158,10 +158,6 @@ loopHasElevated = 0
 adsbLoopPixelsUp = 0
 adsbLoopPauseCount = 0
 adsbLoopHasElevated = 0
-CACHE_REFRESH_CHECK_INTERVAL_S = 1.0
-# ADS-B can spend up to six seconds in sequential aircraft and route requests.
-# Leave additional time for parsing and record-store persistence before rendering.
-PREFETCH_LEAD_TIME_S = 10.0
 PLANE_ENTRY_SCROLL_MULTIPLIER = 2.0
 STATIC_SNAPSHOT_INTERVAL_S = 60.0
 SCROLL_SNAPSHOT_INTERVAL_S = 0.02
@@ -1451,24 +1447,36 @@ def active_mode_limit_s(
     )
 
 
-def prefetch_modes_for_next_cycle(
+def start_mode_cycle_refresh(
+    caches: dict[str, AsyncRefreshCache[Any]],
+    mode: str,
+    cycle_id: int,
+) -> None:
+    """Start one ordered refresh for an upcoming mode-cycle pair."""
+    if mode not in caches:
+        return
+
+    dependency = None
+    if mode == "adsb-records" and "adsb" in caches:
+        dependency = caches["adsb"].start_refresh(
+            "adsb-records-source",
+            cycle_id,
+        )
+        if dependency is None:
+            dependency = caches["adsb"].active_future
+    caches[mode].start_refresh(mode, cycle_id, after=dependency)
+
+
+def start_next_mode_cycle_refresh(
     caches: dict[str, AsyncRefreshCache[Any]],
     modes: list[str],
     active_mode: str,
-    now: float,
+    cycle_id: int,
 ) -> None:
-    """Start refreshes for the next mode before it is displayed."""
+    """Schedule the loader for the mode following the active mode."""
     next_mode = next_transport_mode(modes, active_mode)
-    if next_mode is None or next_mode not in caches:
-        return
-
-    next_cache = caches[next_mode]
-    # Refresh early when the value will become stale before the mode switch.
-    prefetch_maximum_age_s = max(
-        0.0,
-        next_cache.refresh_interval_s - PREFETCH_LEAD_TIME_S,
-    )
-    next_cache.refresh_if_stale(now, prefetch_maximum_age_s)
+    if next_mode is not None:
+        start_mode_cycle_refresh(caches, next_mode, cycle_id)
 
 
 def draw_cached_train_signage(
@@ -1601,15 +1609,16 @@ try:
             refreshExecutor,
         )
 
-    initial_refresh_modes = {
-        modeState.active_mode,
-        config["transport"]["fallbackMode"],
-    }
-    if "adsb-records" in initial_refresh_modes:
-        initial_refresh_modes.add("adsb")
-    for cache_mode in initial_refresh_modes:
-        if cache_mode in displayCaches:
-            displayCaches[cache_mode].refresh_if_due(time.monotonic(), force=True)
+    modeCycleId = 0
+    start_mode_cycle_refresh(displayCaches, modeState.active_mode, modeCycleId)
+    next_mode = next_transport_mode(transportModes, modeState.active_mode)
+    if next_mode is not None:
+        start_next_mode_cycle_refresh(
+            displayCaches,
+            transportModes,
+            modeState.active_mode,
+            modeCycleId + 1,
+        )
 
     if (config['debug'] > 1):
         # render screen and sleep for specified seconds
@@ -1632,8 +1641,11 @@ try:
     timeAtStart = 0
     timeNow = time.time()
     timeFPS = time.time()
-    lastCacheRefreshCheck = 0.0
-    prefetchedForModeSwitch: str | None = None
+    active_cycle_value = displayCaches[modeState.active_mode].promote(
+        modeState.active_mode,
+        modeCycleId,
+        time.monotonic(),
+    ).value
     activeScrollCompletion: ScrollCompletion | None = None
     syncedEntryIndex = 0
 
@@ -1654,11 +1666,7 @@ try:
                     print('Effective FPS: ' + str(round(regulator.effective_FPS(), 2)))
                 previousMode = modeState.active_mode
                 now_monotonic = time.monotonic()
-                active_snapshot = None
-                if modeState.active_mode in displayCaches:
-                    active_snapshot = displayCaches[modeState.active_mode].snapshot(
-                        now_monotonic,
-                    ).value
+                active_snapshot = active_cycle_value
                 can_switch_mode = not (
                     modeState.active_mode in SCROLL_SYNCED_MODES
                     and activeScrollCompletion is not None
@@ -1684,18 +1692,25 @@ try:
                     )
                 scrollCompletedThisFrame = False
                 if modeState.active_mode != previousMode:
+                    modeCycleId += 1
                     timeAtStart = 0
-                    prefetchedForModeSwitch = None
                     activeScrollCompletion = None
                     syncedEntryIndex = 0
                     active_snapshot = None
                     if modeState.active_mode in displayCaches:
                         active_cache = displayCaches[modeState.active_mode]
-                        active_cache.refresh_if_stale(
+                        active_cycle_value = active_cache.promote(
+                            modeState.active_mode,
+                            modeCycleId,
                             now_monotonic,
-                            active_cache.refresh_interval_s,
-                        )
-                        active_snapshot = active_cache.snapshot(now_monotonic).value
+                        ).value
+                        active_snapshot = active_cycle_value
+                    start_next_mode_cycle_refresh(
+                        displayCaches,
+                        transportModes,
+                        modeState.active_mode,
+                        modeCycleId + 1,
+                    )
                 elif (
                     modeState.active_mode in SCROLL_SYNCED_MODES
                     and activeScrollCompletion is not None
@@ -1712,37 +1727,6 @@ try:
                         config,
                         active_snapshot,
                     )
-
-                if (
-                    now_monotonic - lastCacheRefreshCheck
-                    >= CACHE_REFRESH_CHECK_INTERVAL_S
-                ):
-                    lastCacheRefreshCheck = now_monotonic
-                    if modeState.active_mode == "train":
-                        displayCaches["train"].refresh_if_due(now_monotonic)
-
-                    active_value = None
-                    if modeState.active_mode in displayCaches:
-                        active_value = displayCaches[modeState.active_mode].snapshot(
-                            now_monotonic,
-                        ).value
-                    active_limit = active_mode_limit_s(
-                        modeState.active_mode,
-                        active_value,
-                        config,
-                    )
-                    elapsed = now_monotonic - modeState.last_switch
-                    if (
-                        elapsed >= max(0.0, active_limit - PREFETCH_LEAD_TIME_S)
-                        and prefetchedForModeSwitch != modeState.active_mode
-                    ):
-                        prefetch_modes_for_next_cycle(
-                            displayCaches,
-                            transportModes,
-                            modeState.active_mode,
-                            now_monotonic,
-                        )
-                        prefetchedForModeSwitch = modeState.active_mode
 
                 shouldRedraw = timeNow - timeAtStart >= refreshInterval
                 if modeState.active_mode in SCROLL_SYNCED_MODES:
@@ -1762,7 +1746,7 @@ try:
                         if config['dualScreen']:
                             virtual1 = drawDebugScreen(device1, width=widgetWidth, height=widgetHeight, showTime=True, screen="2")
                     elif modeState.active_mode == "adsb":
-                        aircraft = displayCaches["adsb"].snapshot(now_monotonic).value
+                        aircraft = active_cycle_value
                         if aircraft is None:
                             virtual = drawBlankSignage(
                                 device,
@@ -1829,9 +1813,7 @@ try:
                                     departureStation="ADS-B unavailable",
                                 )
                     elif modeState.active_mode == "adsb-records":
-                        boards = displayCaches["adsb-records"].snapshot(
-                            now_monotonic,
-                        ).value
+                        boards = active_cycle_value
                         if boards is None:
                             virtual = drawBlankSignage(
                                 device,
@@ -1898,7 +1880,7 @@ try:
                                     departureStation="ADS-B records unavailable",
                                 )
                     elif modeState.active_mode == "plane-alert":
-                        alerts = displayCaches["plane-alert"].snapshot(now_monotonic).value
+                        alerts = active_cycle_value
                         if alerts is None:
                             virtual = drawBlankSignage(
                                 device,
@@ -1965,7 +1947,7 @@ try:
                                     departureStation="Plane-Alert unavailable",
                                 )
                     else:
-                        data = displayCaches["train"].snapshot(now_monotonic).value
+                        data = active_cycle_value
                         virtual, virtual1_candidate = draw_cached_train_signage(
                             device,
                             device1 if config['dualScreen'] else None,
