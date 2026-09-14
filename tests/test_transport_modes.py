@@ -1,6 +1,9 @@
 from pathlib import Path
 import sys
 
+import pytest
+from PIL import Image
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT / "src"))
 
@@ -11,8 +14,27 @@ from transport_modes import (  # noqa: E402
     intermission_is_complete,
     mode_run_duration_s,
     parse_modes,
+    transition_image_name,
     update_mode_state,
 )
+
+
+def test_each_transport_mode_has_a_transition_image() -> None:
+    transition_directory = PROJECT_ROOT / "src" / "images" / "transitions"
+
+    for mode in ("train", "adsb", "adsb-records", "plane-alert"):
+        image_path = transition_directory / transition_image_name(mode)
+
+        assert image_path.is_file()
+        assert image_path.read_text(encoding="ascii").startswith("#define ")
+        with Image.open(image_path) as image:
+            assert image.mode == "1"
+            assert image.size == (256, 64)
+
+
+def test_transition_image_name_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="Unsupported transport mode: boat"):
+        transition_image_name("boat")
 
 
 def test_intermission_waits_for_minimum_duration_and_refresh() -> None:

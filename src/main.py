@@ -56,6 +56,7 @@ from transport_modes import (
     intermission_is_complete,
     mode_run_duration_s,
     parse_modes,
+    transition_image_name,
     aligned_mode_switch_interval_s,
     update_mode_state,
 )
@@ -699,52 +700,28 @@ def drawIntermission(
     target_mode: str,
 ) -> Any:
     """Build a static intermode screen while target data is refreshed."""
-    labels = {
-        "train": "Train departures",
-        "adsb": "Live aircraft",
-        "adsb-records": "ADSB statistics",
-        "plane-alert": "Aircraft watchlist",
-    }
-    label = labels.get(target_mode, target_mode.replace("-", " ").title())
+    image_path = (
+        Path(__file__).resolve().parent
+        / "images"
+        / "transitions"
+        / transition_image_name(target_mode)
+    )
+    with Image.open(image_path) as source_image:
+        transition_image = source_image.convert("1").copy()
+
     display_device.clear()
     virtual_viewport = viewport(display_device, width=width, height=height)
 
-    def render_centered(text: str) -> Callable[..., None]:
-        def draw_text(
-            draw: ImageDraw.ImageDraw,
-            row_width: int,
-            *_: Any,
-        ) -> None:
-            text_width, _, bitmap = cachedBitmapText(text, fontBold)
-            draw.bitmap(
-                (max(0, (row_width - text_width) / 2), 0),
-                bitmap,
-                fill="yellow",
-            )
+    def render_transition(draw: ImageDraw.ImageDraw, *_: Any) -> None:
+        draw.bitmap((0, 0), transition_image, fill="yellow")
 
-        return draw_text
-
-    next_row = snapshot(
+    transition = snapshot(
         width,
-        10,
-        render_centered("Up next"),
+        height,
+        render_transition,
         interval=STATIC_SNAPSHOT_INTERVAL_S,
     )
-    mode_row = snapshot(
-        width,
-        10,
-        render_centered(label),
-        interval=STATIC_SNAPSHOT_INTERVAL_S,
-    )
-    loading_row = snapshot(
-        width,
-        10,
-        render_centered("Loading..."),
-        interval=STATIC_SNAPSHOT_INTERVAL_S,
-    )
-    virtual_viewport.add_hotspot(next_row, (0, 6))
-    virtual_viewport.add_hotspot(mode_row, (0, 22))
-    virtual_viewport.add_hotspot(loading_row, (0, 38))
+    virtual_viewport.add_hotspot(transition, (0, 0))
     return virtual_viewport
 
 
