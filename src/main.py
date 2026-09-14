@@ -64,6 +64,7 @@ from scroll_sync import (
     ScrollCompletion,
     mode_scroll_required_cycles,
 )
+from transition_screens import load_transition_image
 
 import RPi.GPIO as GPIO
 
@@ -687,6 +688,28 @@ def drawBlankSignage(device, width, height, departureStation):
     virtualViewport.add_hotspot(rowThree, (0, 24))
     virtualViewport.add_hotspot(rowTime, (0, 50))
 
+    return virtualViewport
+
+
+def drawTransitionSignage(device, width: int, height: int, mode: str):
+    """Render a static full-screen image while a transport mode loads."""
+    transition_image = load_transition_image(mode)
+    if transition_image.size != (width, height):
+        transition_image = transition_image.resize((width, height))
+
+    device.clear()
+    virtualViewport = viewport(device, width=width, height=height)
+
+    def render_transition(draw, *_):
+        draw.bitmap((0, 0), transition_image, fill="white")
+
+    transition = snapshot(
+        width,
+        height,
+        render_transition,
+        interval=config["refreshTime"],
+    )
+    virtualViewport.add_hotspot(transition, (0, 0))
     return virtualViewport
 
 
@@ -1480,19 +1503,19 @@ def draw_cached_train_signage(
 ) -> tuple[Any, Any]:
     """Build train viewports from cached train data without network I/O."""
     if train_data is None:
-        primary = drawBlankSignage(
+        primary = drawTransitionSignage(
             primary_device,
             width=width,
             height=height,
-            departureStation="Loading trains",
+            mode="train",
         )
         secondary = None
         if config['dualScreen']:
-            secondary = drawBlankSignage(
+            secondary = drawTransitionSignage(
                 secondary_device,
                 width=width,
                 height=height,
-                departureStation="Loading trains",
+                mode="train",
             )
         return primary, secondary
 
@@ -1764,18 +1787,18 @@ try:
                     elif modeState.active_mode == "adsb":
                         aircraft = displayCaches["adsb"].snapshot(now_monotonic).value
                         if aircraft is None:
-                            virtual = drawBlankSignage(
+                            virtual = drawTransitionSignage(
                                 device,
                                 width=widgetWidth,
                                 height=widgetHeight,
-                                departureStation="Loading ADS-B",
+                                mode="adsb",
                             )
                             if config['dualScreen']:
-                                virtual1 = drawBlankSignage(
+                                virtual1 = drawTransitionSignage(
                                     device1,
                                     width=widgetWidth,
                                     height=widgetHeight,
-                                    departureStation="Loading ADS-B",
+                                    mode="adsb",
                                 )
                         elif aircraft is not False:
                             activeScrollCompletion = ScrollCompletion(
@@ -1833,18 +1856,18 @@ try:
                             now_monotonic,
                         ).value
                         if boards is None:
-                            virtual = drawBlankSignage(
+                            virtual = drawTransitionSignage(
                                 device,
                                 width=widgetWidth,
                                 height=widgetHeight,
-                                departureStation="Loading ADS-B records",
+                                mode="adsb-records",
                             )
                             if config['dualScreen']:
-                                virtual1 = drawBlankSignage(
+                                virtual1 = drawTransitionSignage(
                                     device1,
                                     width=widgetWidth,
                                     height=widgetHeight,
-                                    departureStation="Loading ADS-B records",
+                                    mode="adsb-records",
                                 )
                         elif boards is not False:
                             activeScrollCompletion = ScrollCompletion(
@@ -1900,18 +1923,18 @@ try:
                     elif modeState.active_mode == "plane-alert":
                         alerts = displayCaches["plane-alert"].snapshot(now_monotonic).value
                         if alerts is None:
-                            virtual = drawBlankSignage(
+                            virtual = drawTransitionSignage(
                                 device,
                                 width=widgetWidth,
                                 height=widgetHeight,
-                                departureStation="Loading Plane-Alert",
+                                mode="plane-alert",
                             )
                             if config['dualScreen']:
-                                virtual1 = drawBlankSignage(
+                                virtual1 = drawTransitionSignage(
                                     device1,
                                     width=widgetWidth,
                                     height=widgetHeight,
-                                    departureStation="Loading Plane-Alert",
+                                    mode="plane-alert",
                                 )
                         elif alerts is not False:
                             activeScrollCompletion = ScrollCompletion(
