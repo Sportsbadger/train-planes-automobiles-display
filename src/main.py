@@ -61,6 +61,7 @@ from transport_modes import (
 )
 from refresh_cache import AsyncRefreshCache
 from bitmap_cache import BitmapTextCache
+from display_images import load_mode_image
 from scroll_sync import (
     SCROLL_REQUIRED_CYCLES,
     ScrollCompletion,
@@ -699,6 +700,23 @@ def drawIntermission(
     target_mode: str,
 ) -> Any:
     """Build a static intermode screen while target data is refreshed."""
+    mode_image = load_mode_image(target_mode)
+    if mode_image is not None:
+        display_device.clear()
+        virtual_viewport = viewport(display_device, width=width, height=height)
+
+        def render_image(draw: ImageDraw.ImageDraw, *_: Any) -> None:
+            draw.bitmap((0, 0), mode_image, fill="yellow")
+
+        image_snapshot = snapshot(
+            width,
+            height,
+            render_image,
+            interval=STATIC_SNAPSHOT_INTERVAL_S,
+        )
+        virtual_viewport.add_hotspot(image_snapshot, (0, 0))
+        return virtual_viewport
+
     labels = {
         "train": "Train departures",
         "adsb": "Live aircraft",
