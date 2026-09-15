@@ -328,6 +328,11 @@ def loadConfig():
         "modeRunCount",
         minimum=1,
     )
+    data["transport"]["intermissionDuration"] = _env_float(
+        "intermissionDuration",
+        2.0,
+        minimum=0.0,
+    )
     data["transport"]["fallbackMode"] = (
         os.getenv("transportFallbackMode") or "train"
     ).lower()

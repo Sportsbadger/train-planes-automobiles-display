@@ -83,54 +83,31 @@ def test_refresh_interval_must_be_positive() -> None:
             AsyncRefreshCache(lambda: "ready", 0.0, executor)
 
 
-def test_ordered_refresh_waits_for_dependency() -> None:
-    events: list[str] = []
+def test_refresh_if_stale_reuses_in_flight_prefetch() -> None:
+    calls = 0
+    release_loader = Event()
 
-    def load_adsb() -> str:
-        events.append("adsb")
-        return "aircraft"
+    def load_value() -> str:
+        nonlocal calls
+        calls += 1
+        release_loader.wait(timeout=1.0)
+        return "ready"
 
-    def load_records() -> str:
-        events.append("records")
-        return "boards"
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        cache = AsyncRefreshCache(load_value, 10.0, executor)
+        cache.refresh_if_stale(0.0, 5.0)
+        cache.refresh_if_stale(10.0, 5.0)
+        release_loader.set()
+        executor.shutdown(wait=True)
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        adsb = AsyncRefreshCache(load_adsb, 1.0, executor)
-        records = AsyncRefreshCache(load_records, 1.0, executor)
-        dependency = adsb.start_refresh("adsb-records-source", 4)
-        assert dependency is not None
-        result = records.start_refresh("adsb-records", 4, after=dependency)
-        assert result is not None
-        result.result()
+        snapshot = cache.snapshot(11.0)
 
-    assert events == ["adsb", "records"]
+    assert snapshot.value == "ready"
+    assert calls == 1
 
 
-def test_mode_cycle_scheduling_ignores_short_refresh_intervals() -> None:
-    calls = {"train": 0, "adsb": 0, "plane-alert": 0}
-
-    def loader(mode: str):
-        def load() -> str:
-            calls[mode] += 1
-            return f"{mode}-{calls[mode]}"
-
-        return load
-
-    with ThreadPoolExecutor(max_workers=3) as executor:
-        caches = {
-            mode: AsyncRefreshCache(loader(mode), 0.01, executor)
-            for mode in calls
-        }
-        modes = list(caches)
-        # This mirrors the main loop: each boundary schedules exactly the next
-        # mode, regardless of how many interval checks fit inside a mode run.
-        for cycle_id in range(6):
-            mode = modes[cycle_id % len(modes)]
-            future = caches[mode].start_refresh(mode, cycle_id)
-            assert future is not None
-            future.result()
-            caches[mode].promote(mode, cycle_id, float(cycle_id))
-            for _ in range(100):
-                caches[mode].snapshot(float(cycle_id) + 0.02)
-
-    assert calls == {"train": 2, "adsb": 2, "plane-alert": 2}
+def test_refresh_if_stale_validates_maximum_age() -> None:
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        cache = AsyncRefreshCache(lambda: "ready", 10.0, executor)
+        with pytest.raises(ValueError, match="maximum_age_s"):
+            cache.refresh_if_stale(0.0, -1.0)

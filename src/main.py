@@ -51,7 +51,9 @@ from departure_loop import (
     timed_loop_index,
 )
 from transport_modes import (
+    IntermissionState,
     build_mode_state,
+    intermission_is_complete,
     mode_run_duration_s,
     parse_modes,
     aligned_mode_switch_interval_s,
@@ -684,6 +686,62 @@ def drawBlankSignage(device, width, height, departureStation):
     virtualViewport.add_hotspot(rowTime, (0, 50))
 
     return virtualViewport
+
+
+def drawIntermission(
+    display_device: Any,
+    width: int,
+    height: int,
+    target_mode: str,
+) -> Any:
+    """Build a static intermode screen while target data is refreshed."""
+    labels = {
+        "train": "Train departures",
+        "adsb": "Live aircraft",
+        "adsb-records": "ADSB statistics",
+        "plane-alert": "Aircraft watchlist",
+    }
+    label = labels.get(target_mode, target_mode.replace("-", " ").title())
+    display_device.clear()
+    virtual_viewport = viewport(display_device, width=width, height=height)
+
+    def render_centered(text: str) -> Callable[..., None]:
+        def draw_text(
+            draw: ImageDraw.ImageDraw,
+            row_width: int,
+            *_: Any,
+        ) -> None:
+            text_width, _, bitmap = cachedBitmapText(text, fontBold)
+            draw.bitmap(
+                (max(0, (row_width - text_width) / 2), 0),
+                bitmap,
+                fill="yellow",
+            )
+
+        return draw_text
+
+    next_row = snapshot(
+        width,
+        10,
+        render_centered("Up next"),
+        interval=STATIC_SNAPSHOT_INTERVAL_S,
+    )
+    mode_row = snapshot(
+        width,
+        10,
+        render_centered(label),
+        interval=STATIC_SNAPSHOT_INTERVAL_S,
+    )
+    loading_row = snapshot(
+        width,
+        10,
+        render_centered("Loading..."),
+        interval=STATIC_SNAPSHOT_INTERVAL_S,
+    )
+    virtual_viewport.add_hotspot(next_row, (0, 6))
+    virtual_viewport.add_hotspot(mode_row, (0, 22))
+    virtual_viewport.add_hotspot(loading_row, (0, 38))
+    return virtual_viewport
 
 
 def platform_filter(departureData, platformNumber, station):
@@ -1648,6 +1706,7 @@ try:
     ).value
     activeScrollCompletion: ScrollCompletion | None = None
     syncedEntryIndex = 0
+    intermissionState: IntermissionState | None = None
 
     blankHours = []
     if config['hoursPattern'].match(config['screenBlankHours']):
@@ -1666,8 +1725,27 @@ try:
                     print('Effective FPS: ' + str(round(regulator.effective_FPS(), 2)))
                 previousMode = modeState.active_mode
                 now_monotonic = time.monotonic()
-                active_snapshot = active_cycle_value
-                can_switch_mode = not (
+                active_snapshot = None
+                if modeState.active_mode in displayCaches:
+                    active_snapshot = displayCaches[modeState.active_mode].snapshot(
+                        now_monotonic,
+                    ).value
+                if intermissionState is not None:
+                    target_snapshot = displayCaches[
+                        intermissionState.target_mode
+                    ].snapshot(now_monotonic)
+                    if intermission_is_complete(
+                        intermissionState,
+                        now_monotonic,
+                        float(config["transport"]["intermissionDuration"]),
+                        target_snapshot.is_refreshing,
+                    ):
+                        intermissionState = None
+                        modeState.last_switch = now_monotonic
+                        timeAtStart = 0
+                        active_snapshot = target_snapshot.value
+
+                can_switch_mode = intermissionState is None and not (
                     modeState.active_mode in SCROLL_SYNCED_MODES
                     and activeScrollCompletion is not None
                     and not activeScrollCompletion.complete
@@ -1699,18 +1777,32 @@ try:
                     active_snapshot = None
                     if modeState.active_mode in displayCaches:
                         active_cache = displayCaches[modeState.active_mode]
-                        active_cycle_value = active_cache.promote(
-                            modeState.active_mode,
-                            modeCycleId,
+                        # Reuse a recent prefetch instead of immediately issuing
+                        # the same request again at the mode boundary. If the
+                        # prefetch is still active, refresh_if_stale leaves it
+                        # running and the intermission waits for its result.
+                        active_cache.refresh_if_stale(
                             now_monotonic,
-                        ).value
-                        active_snapshot = active_cycle_value
-                    start_next_mode_cycle_refresh(
-                        displayCaches,
-                        transportModes,
-                        modeState.active_mode,
-                        modeCycleId + 1,
-                    )
+                            PREFETCH_LEAD_TIME_S,
+                        )
+                        active_snapshot = active_cache.snapshot(now_monotonic).value
+                        intermissionState = IntermissionState(
+                            target_mode=modeState.active_mode,
+                            started_at=now_monotonic,
+                        )
+                        virtual = drawIntermission(
+                            device,
+                            widgetWidth,
+                            widgetHeight,
+                            modeState.active_mode,
+                        )
+                        if config['dualScreen']:
+                            virtual1 = drawIntermission(
+                                device1,
+                                widgetWidth,
+                                widgetHeight,
+                                modeState.active_mode,
+                            )
                 elif (
                     modeState.active_mode in SCROLL_SYNCED_MODES
                     and activeScrollCompletion is not None
@@ -1737,6 +1829,8 @@ try:
                         )
                     else:
                         shouldRedraw = activeScrollCompletion.complete
+                if intermissionState is not None:
+                    shouldRedraw = False
 
                 if shouldRedraw:
                     # check if debug mode is enabled

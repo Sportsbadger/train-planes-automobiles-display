@@ -83,6 +83,7 @@ data:
     - transportModes: train,plane-alert
     - modeSwitchInterval: 300
     - modeRunCount:
+    - intermissionDuration: 2
     - lastLineText: '****Last Line****'
     - planeAlertSourceUrl: http://192.168.1.74:8083/cgi/stream.sh?mode=plane-alert&date=all
     - planeAlertRefreshTime: 30

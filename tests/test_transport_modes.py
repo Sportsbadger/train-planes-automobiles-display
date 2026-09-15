@@ -5,12 +5,28 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT / "src"))
 
 from transport_modes import (  # noqa: E402
+    IntermissionState,
     aligned_mode_switch_interval_s,
     build_mode_state,
+    intermission_is_complete,
     mode_run_duration_s,
     parse_modes,
     update_mode_state,
 )
+
+
+def test_intermission_waits_for_minimum_duration_and_refresh() -> None:
+    state = IntermissionState(target_mode="adsb", started_at=10.0)
+
+    assert not intermission_is_complete(state, 11.9, 2.0, False)
+    assert not intermission_is_complete(state, 12.0, 2.0, True)
+    assert intermission_is_complete(state, 12.0, 2.0, False)
+
+
+def test_intermission_allows_zero_minimum_duration() -> None:
+    state = IntermissionState(target_mode="train", started_at=10.0)
+
+    assert intermission_is_complete(state, 10.0, 0.0, False)
 
 
 def test_parse_modes_respects_explicit_adsb_only_mode():
