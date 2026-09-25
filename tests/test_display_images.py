@@ -21,6 +21,7 @@ def test_load_mode_image_returns_display_ready_artwork(mode: str) -> None:
     assert image is not None
     assert image.mode == "1"
     assert image.size == DISPLAY_SIZE
+    assert image.getpixel((0, 0)) == 0
 
 
 def test_each_transport_mode_has_distinct_artwork() -> None:

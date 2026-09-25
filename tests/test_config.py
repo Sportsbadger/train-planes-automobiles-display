@@ -163,6 +163,14 @@ def test_adsb_config_parses_enabled_values(monkeypatch):
     assert config["planeAlert"]["nextRightTemplate"] == "{equipment} {time}"
 
 
+def test_intermission_duration_is_at_least_two_seconds(monkeypatch):
+    monkeypatch.setenv("intermissionDuration", "0.5")
+
+    config = loadConfig()
+
+    assert config["transport"]["intermissionDuration"] == 2.0
+
+
 def test_plane_alert_display_count_caps_at_latest_30(monkeypatch):
     monkeypatch.setenv("planeAlertDisplayCount", "99")
 
