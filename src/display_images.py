@@ -10,6 +10,8 @@ IMAGE_DIRECTORY: Final[Path] = Path(__file__).resolve().parent / "images"
 MODE_IMAGE_FILES: Final[dict[str, str]] = {
     "train": "train-intermission.pbm",
     "adsb": "adsb-intermission.pbm",
+    "adsb-records": "adsb-intermission.pbm",
+    "plane-alert": "plane-alert-intermission.pbm",
 }
 
 

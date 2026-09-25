@@ -11,7 +11,10 @@ import display_images  # noqa: E402
 from display_images import DISPLAY_SIZE, load_mode_image  # noqa: E402
 
 
-@pytest.mark.parametrize("mode", ["train", "adsb"])
+@pytest.mark.parametrize(
+    "mode",
+    ["train", "adsb", "adsb-records", "plane-alert"],
+)
 def test_load_mode_image_returns_display_ready_artwork(mode: str) -> None:
     image = load_mode_image(mode)
 
@@ -30,7 +33,7 @@ def test_display_artwork_is_ascii_text(filename: str) -> None:
 
 
 def test_load_mode_image_returns_none_for_mode_without_artwork() -> None:
-    assert load_mode_image("plane-alert") is None
+    assert load_mode_image("automobile") is None
 
 
 def test_load_mode_image_raises_when_configured_artwork_is_missing(
