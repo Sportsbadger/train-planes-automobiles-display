@@ -62,6 +62,7 @@ from transport_modes import (
 )
 from refresh_cache import AsyncRefreshCache
 from bitmap_cache import BitmapTextCache
+from display_images import load_mode_image
 from scroll_sync import (
     SCROLL_REQUIRED_CYCLES,
     ScrollCompletion,
