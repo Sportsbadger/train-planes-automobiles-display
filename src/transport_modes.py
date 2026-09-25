@@ -5,6 +5,14 @@ from math import ceil
 from typing import Sequence
 
 
+TRANSITION_IMAGE_NAMES = {
+    "train": "train.xbm",
+    "adsb": "adsb.xbm",
+    "adsb-records": "adsb-records.xbm",
+    "plane-alert": "plane-alert.xbm",
+}
+
+
 @dataclass
 class ModeState:
     """Tracks the active transport mode and last switch time."""
@@ -19,6 +27,24 @@ class IntermissionState:
 
     target_mode: str
     started_at: float
+
+
+def transition_image_name(mode: str) -> str:
+    """Return the packaged transition image name for a transport mode.
+
+    Args:
+        mode: Normalized transport mode name.
+
+    Returns:
+        Image filename for the mode's transition screen.
+
+    Raises:
+        ValueError: If the mode has no transition image.
+    """
+    try:
+        return TRANSITION_IMAGE_NAMES[mode]
+    except KeyError as error:
+        raise ValueError(f"Unsupported transport mode: {mode}") from error
 
 
 def intermission_is_complete(
