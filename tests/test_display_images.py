@@ -23,6 +23,10 @@ def test_load_mode_image_returns_display_ready_artwork(mode: str) -> None:
     assert image.size == DISPLAY_SIZE
 
 
+def test_each_transport_mode_has_distinct_artwork() -> None:
+    assert len(set(display_images.MODE_IMAGE_FILES.values())) == 4
+
+
 @pytest.mark.parametrize("filename", display_images.MODE_IMAGE_FILES.values())
 def test_display_artwork_is_ascii_text(filename: str) -> None:
     artwork = (display_images.IMAGE_DIRECTORY / filename).read_bytes()
