@@ -2,6 +2,7 @@ import os
 import re
 
 from adsb_records import normalize_record_windows
+from transport_modes import MIN_INTERMISSION_DURATION_S
 
 
 DEFAULT_ADSB_RECORDS_STORE_PATH = "/data/adsb-records.json"
@@ -330,8 +331,8 @@ def loadConfig():
     )
     data["transport"]["intermissionDuration"] = _env_float(
         "intermissionDuration",
-        2.0,
-        minimum=2.0,
+        MIN_INTERMISSION_DURATION_S,
+        minimum=MIN_INTERMISSION_DURATION_S,
     )
     data["transport"]["fallbackMode"] = (
         os.getenv("transportFallbackMode") or "train"

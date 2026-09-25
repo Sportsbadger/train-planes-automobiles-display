@@ -32,7 +32,7 @@ def test_each_transport_mode_has_distinct_artwork() -> None:
 def test_display_artwork_is_ascii_text(filename: str) -> None:
     artwork = (display_images.IMAGE_DIRECTORY / filename).read_bytes()
 
-    assert artwork.startswith(b"P1\n")
+    assert artwork.startswith(b"#define ")
     assert b"\0" not in artwork
     artwork.decode("ascii")
 
