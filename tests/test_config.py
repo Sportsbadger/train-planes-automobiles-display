@@ -14,6 +14,9 @@ def test_adsb_config_defaults_to_disabled_train_only(monkeypatch):
         "modeSwitchInterval",
         "modeRunCount",
         "intermissionDuration",
+        "transportModeDurationSeconds",
+        "transportModeCycleCount",
+        "transportTransitionDurationSeconds",
         "lastLineText",
         "adsbHomeLat",
         "adsbHomeLon",
@@ -50,6 +53,9 @@ def test_adsb_config_defaults_to_disabled_train_only(monkeypatch):
     assert config["transport"]["modeSwitchInterval"] == 300
     assert config["transport"]["modeRunCount"] is None
     assert config["transport"]["intermissionDuration"] == 2.0
+    assert config["transport"]["modeDurationSeconds"] == 300
+    assert config["transport"]["modeCycleCount"] is None
+    assert config["transport"]["transitionDurationSeconds"] == 2.0
     assert config["transport"]["lastLineText"] == "****Last Line****"
     assert config["adsb"]["homeLat"] is None
     assert config["adsb"]["homeLon"] is None
@@ -169,6 +175,24 @@ def test_intermission_duration_cannot_disable_two_second_floor(monkeypatch):
     config = loadConfig()
 
     assert config["transport"]["intermissionDuration"] == 2.0
+
+
+def test_new_transport_names_override_legacy_names(monkeypatch):
+    monkeypatch.setenv("modeSwitchInterval", "60")
+    monkeypatch.setenv("modeRunCount", "2")
+    monkeypatch.setenv("intermissionDuration", "3")
+    monkeypatch.setenv("transportModeDurationSeconds", "90")
+    monkeypatch.setenv("transportModeCycleCount", "4")
+    monkeypatch.setenv("transportTransitionDurationSeconds", "5")
+
+    config = loadConfig()
+
+    assert config["transport"]["modeDurationSeconds"] == 90
+    assert config["transport"]["modeCycleCount"] == 4
+    assert config["transport"]["transitionDurationSeconds"] == 5.0
+    assert config["transport"]["modeSwitchInterval"] == 90
+    assert config["transport"]["modeRunCount"] == 4
+    assert config["transport"]["intermissionDuration"] == 5.0
 
 
 def test_plane_alert_display_count_caps_at_latest_30(monkeypatch):

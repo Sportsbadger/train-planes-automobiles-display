@@ -9,12 +9,15 @@ sys.path.append(str(PROJECT_ROOT / "src"))
 
 from transport_modes import (  # noqa: E402
     IntermissionState,
+    TransitionState,
     aligned_mode_switch_interval_s,
     build_mode_state,
     intermission_is_complete,
+    mark_transition_visible,
     mode_run_duration_s,
     parse_modes,
     transition_image_name,
+    transition_is_complete,
     update_mode_state,
 )
 
@@ -38,7 +41,8 @@ def test_transition_image_name_rejects_unknown_mode() -> None:
 
 
 def test_intermission_waits_for_minimum_duration_and_refresh() -> None:
-    state = IntermissionState(target_mode="adsb", started_at=10.0)
+    state = TransitionState(target_mode="adsb", requested_at=9.0)
+    mark_transition_visible(state, 10.0)
 
     assert not intermission_is_complete(state, 11.9, 2.0, False)
     assert not intermission_is_complete(state, 12.0, 2.0, True)
@@ -50,7 +54,8 @@ def test_intermission_waits_for_minimum_duration_and_refresh() -> None:
     ("train", "adsb", "adsb-records", "plane-alert"),
 )
 def test_intermission_enforces_two_second_floor(target_mode: str) -> None:
-    state = IntermissionState(target_mode=target_mode, started_at=10.0)
+    state = TransitionState(target_mode=target_mode, requested_at=9.0)
+    mark_transition_visible(state, 10.0)
 
     assert not intermission_is_complete(state, 11.9, 0.0, False)
     assert intermission_is_complete(state, 12.0, 0.0, False)
@@ -63,10 +68,30 @@ def test_intermission_enforces_two_second_floor(target_mode: str) -> None:
 def test_configured_intermission_duration_applies_to_every_mode(
     target_mode: str,
 ) -> None:
-    state = IntermissionState(target_mode=target_mode, started_at=10.0)
+    state = TransitionState(target_mode=target_mode, requested_at=9.0)
+    mark_transition_visible(state, 10.0)
 
     assert not intermission_is_complete(state, 13.9, 4.0, False)
     assert intermission_is_complete(state, 14.0, 4.0, False)
+
+
+def test_transition_duration_starts_after_first_visible_refresh() -> None:
+    state = TransitionState(target_mode="adsb-records", requested_at=10.0)
+
+    assert not transition_is_complete(state, 20.0, 2.0, False)
+
+    mark_transition_visible(state, 20.0)
+    mark_transition_visible(state, 21.0)
+
+    assert state.visible_since == 20.0
+    assert not transition_is_complete(state, 21.9, 2.0, False)
+    assert transition_is_complete(state, 22.0, 2.0, False)
+
+
+def test_legacy_intermission_state_retains_started_at_semantics() -> None:
+    state = IntermissionState(target_mode="adsb-records", started_at=10.0)
+
+    assert intermission_is_complete(state, 12.0, 2.0, False)
 
 
 def test_parse_modes_respects_explicit_adsb_only_mode():

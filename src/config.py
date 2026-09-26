@@ -74,6 +74,14 @@ def _env_optional_int(
         return minimum
     return parsed
 
+
+def _env_name(primary_name: str, legacy_name: str) -> str:
+    """Select a new environment variable name while retaining compatibility."""
+    if os.getenv(primary_name) not in (None, ""):
+        return primary_name
+    return legacy_name
+
+
 # validate platform number
 def parsePlatformData(platform):
     if platform is None:
@@ -319,20 +327,31 @@ def loadConfig():
     data["transport"]["lastLineText"] = (
         os.getenv("lastLineText") or DEFAULT_LAST_LINE_TEXT
     )
-    data["transport"]["modeSwitchInterval"] = _env_int(
-        "modeSwitchInterval",
+    data["transport"]["modeDurationSeconds"] = _env_int(
+        _env_name("transportModeDurationSeconds", "modeSwitchInterval"),
         300,
         minimum=1,
     )
-    data["transport"]["modeRunCount"] = _env_optional_int(
-        "modeRunCount",
+    data["transport"]["modeCycleCount"] = _env_optional_int(
+        _env_name("transportModeCycleCount", "modeRunCount"),
         minimum=1,
     )
-    data["transport"]["intermissionDuration"] = _env_float(
-        "intermissionDuration",
+    data["transport"]["transitionDurationSeconds"] = _env_float(
+        _env_name(
+            "transportTransitionDurationSeconds",
+            "intermissionDuration",
+        ),
         2.0,
         minimum=2.0,
     )
+    # Keep the old configuration keys during the environment-name migration.
+    data["transport"]["modeSwitchInterval"] = data["transport"][
+        "modeDurationSeconds"
+    ]
+    data["transport"]["modeRunCount"] = data["transport"]["modeCycleCount"]
+    data["transport"]["intermissionDuration"] = data["transport"][
+        "transitionDurationSeconds"
+    ]
     data["transport"]["fallbackMode"] = (
         os.getenv("transportFallbackMode") or "train"
     ).lower()

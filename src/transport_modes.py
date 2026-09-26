@@ -22,12 +22,33 @@ class ModeState:
     last_switch: float
 
 
-@dataclass(frozen=True)
-class IntermissionState:
-    """Tracks a mode transition while the next mode prepares its data."""
+@dataclass
+class TransitionState:
+    """Tracks a transition screen while the next mode prepares its data."""
 
     target_mode: str
-    started_at: float
+    requested_at: float
+    visible_since: float | None = None
+
+
+class IntermissionState(TransitionState):
+    """Compatibility state accepting the previous ``started_at`` name."""
+
+    def __init__(self, target_mode: str, started_at: float) -> None:
+        """Initialize a transition using the legacy request timestamp."""
+        super().__init__(target_mode=target_mode, requested_at=started_at)
+        self.visible_since = started_at
+
+
+def mark_transition_visible(state: TransitionState, now: float) -> None:
+    """Record when a transition image was first sent to the display.
+
+    Args:
+        state: Active transition state.
+        now: Current monotonic timestamp after the display refresh.
+    """
+    if state.visible_since is None:
+        state.visible_since = now
 
 
 def transition_image_name(mode: str) -> str:
@@ -48,16 +69,16 @@ def transition_image_name(mode: str) -> str:
         raise ValueError(f"Unsupported transport mode: {mode}") from error
 
 
-def intermission_is_complete(
-    state: IntermissionState,
+def transition_is_complete(
+    state: TransitionState,
     now: float,
     minimum_duration_s: float,
     data_is_refreshing: bool,
 ) -> bool:
-    """Return whether an intermode loading screen can be dismissed.
+    """Return whether a transition screen can be dismissed.
 
     Args:
-        state: Active intermission state.
+        state: Active transition state.
         now: Current monotonic timestamp.
         minimum_duration_s: Minimum time to show the intermission screen.
         data_is_refreshing: Whether the target mode still has an active load.
@@ -65,12 +86,30 @@ def intermission_is_complete(
     Returns:
         ``True`` once the minimum display time and target refresh are complete.
     """
-    elapsed_s = now - state.started_at
+    if state.visible_since is None:
+        return False
+
+    elapsed_s = now - state.visible_since
     effective_duration_s = max(
         MINIMUM_INTERMISSION_DURATION_S,
         minimum_duration_s,
     )
     return elapsed_s >= effective_duration_s and not data_is_refreshing
+
+
+def intermission_is_complete(
+    state: TransitionState,
+    now: float,
+    minimum_duration_s: float,
+    data_is_refreshing: bool,
+) -> bool:
+    """Compatibility wrapper for :func:`transition_is_complete`."""
+    return transition_is_complete(
+        state,
+        now,
+        minimum_duration_s,
+        data_is_refreshing,
+    )
 
 
 def parse_modes(

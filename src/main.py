@@ -1,5 +1,6 @@
 import os
 import time
+from functools import lru_cache
 from pathlib import Path
 
 import requests
@@ -51,12 +52,14 @@ from departure_loop import (
     timed_loop_index,
 )
 from transport_modes import (
-    IntermissionState,
+    TRANSITION_IMAGE_NAMES,
+    TransitionState,
     build_mode_state,
-    intermission_is_complete,
+    mark_transition_visible,
     mode_run_duration_s,
     parse_modes,
     transition_image_name,
+    transition_is_complete,
     aligned_mode_switch_interval_s,
     update_mode_state,
 )
@@ -693,13 +696,9 @@ def drawBlankSignage(device, width, height, departureStation):
     return virtualViewport
 
 
-def drawIntermission(
-    display_device: Any,
-    width: int,
-    height: int,
-    target_mode: str,
-) -> Any:
-    """Build a static intermode screen while target data is refreshed."""
+@lru_cache(maxsize=len(TRANSITION_IMAGE_NAMES))
+def load_transition_image(target_mode: str) -> Image.Image:
+    """Load and cache a mode transition image."""
     image_path = (
         Path(__file__).resolve().parent
         / "images"
@@ -707,9 +706,17 @@ def drawIntermission(
         / transition_image_name(target_mode)
     )
     with Image.open(image_path) as source_image:
-        transition_image = source_image.convert("1").copy()
+        return source_image.convert("1").copy()
 
-    display_device.clear()
+
+def drawTransitionScreen(
+    display_device: Any,
+    width: int,
+    height: int,
+    target_mode: str,
+) -> Any:
+    """Build a static transition screen while target data is refreshed."""
+    transition_image = load_transition_image(target_mode)
     virtual_viewport = viewport(display_device, width=width, height=height)
 
     def render_transition(draw: ImageDraw.ImageDraw, *_: Any) -> None:
@@ -723,6 +730,10 @@ def drawIntermission(
     )
     virtual_viewport.add_hotspot(transition, (0, 0))
     return virtual_viewport
+
+
+# Compatibility name for callers using the previous public function.
+drawIntermission = drawTransitionScreen
 
 
 def platform_filter(departureData, platformNumber, station):
@@ -1474,15 +1485,15 @@ def active_mode_limit_s(
 ) -> float:
     """Return seconds before the active transport mode will switch."""
     entry_interval = mode_entry_interval_s(mode, app_config, value)
-    mode_run_count = app_config["transport"].get("modeRunCount")
-    if mode_run_count is None:
-        switch_interval = float(app_config["transport"]["modeSwitchInterval"])
+    mode_cycle_count = app_config["transport"].get("modeCycleCount")
+    if mode_cycle_count is None:
+        switch_interval = float(app_config["transport"]["modeDurationSeconds"])
         return aligned_mode_switch_interval_s(switch_interval, entry_interval)
     return mode_run_duration_s(
         mode,
         mode_entry_count(mode, value, app_config),
         entry_interval,
-        int(mode_run_count),
+        int(mode_cycle_count),
     )
 
 
@@ -1671,7 +1682,7 @@ try:
     prefetchedForModeSwitch: str | None = None
     activeScrollCompletion: ScrollCompletion | None = None
     syncedEntryIndex = 0
-    intermissionState: IntermissionState | None = None
+    transition_state: TransitionState | None = None
 
     blankHours = []
     if config['hoursPattern'].match(config['screenBlankHours']):
@@ -1695,22 +1706,24 @@ try:
                     active_snapshot = displayCaches[modeState.active_mode].snapshot(
                         now_monotonic,
                     ).value
-                if intermissionState is not None:
+                if transition_state is not None:
                     target_snapshot = displayCaches[
-                        intermissionState.target_mode
+                        transition_state.target_mode
                     ].snapshot(now_monotonic)
-                    if intermission_is_complete(
-                        intermissionState,
+                    if transition_is_complete(
+                        transition_state,
                         now_monotonic,
-                        float(config["transport"]["intermissionDuration"]),
+                        float(
+                            config["transport"]["transitionDurationSeconds"]
+                        ),
                         target_snapshot.is_refreshing,
                     ):
-                        intermissionState = None
+                        transition_state = None
                         modeState.last_switch = now_monotonic
                         timeAtStart = 0
                         active_snapshot = target_snapshot.value
 
-                can_switch_mode = intermissionState is None and not (
+                can_switch_mode = transition_state is None and not (
                     modeState.active_mode in SCROLL_SYNCED_MODES
                     and activeScrollCompletion is not None
                     and not activeScrollCompletion.complete
@@ -1720,8 +1733,8 @@ try:
                         modeState,
                         transportModes,
                         now_monotonic,
-                        float(config["transport"]["modeSwitchInterval"]),
-                        mode_run_count=config["transport"].get("modeRunCount"),
+                        float(config["transport"]["modeDurationSeconds"]),
+                        mode_run_count=config["transport"].get("modeCycleCount"),
                         entry_count=mode_entry_count(
                             modeState.active_mode,
                             active_snapshot,
@@ -1744,18 +1757,18 @@ try:
                         active_cache = displayCaches[modeState.active_mode]
                         active_cache.refresh_if_due(now_monotonic, force=True)
                         active_snapshot = active_cache.snapshot(now_monotonic).value
-                        intermissionState = IntermissionState(
+                        transition_state = TransitionState(
                             target_mode=modeState.active_mode,
-                            started_at=now_monotonic,
+                            requested_at=now_monotonic,
                         )
-                        virtual = drawIntermission(
+                        virtual = drawTransitionScreen(
                             device,
                             widgetWidth,
                             widgetHeight,
                             modeState.active_mode,
                         )
                         if config['dualScreen']:
-                            virtual1 = drawIntermission(
+                            virtual1 = drawTransitionScreen(
                                 device1,
                                 widgetWidth,
                                 widgetHeight,
@@ -1818,7 +1831,7 @@ try:
                         )
                     else:
                         shouldRedraw = activeScrollCompletion.complete
-                if intermissionState is not None:
+                if transition_state is not None:
                     shouldRedraw = False
 
                 if shouldRedraw:
@@ -2049,6 +2062,11 @@ try:
                 virtual.refresh()
                 if config['dualScreen']:
                     virtual1.refresh()
+                if transition_state is not None:
+                    mark_transition_visible(
+                        transition_state,
+                        time.monotonic(),
+                    )
 
 except KeyboardInterrupt:
     pass
