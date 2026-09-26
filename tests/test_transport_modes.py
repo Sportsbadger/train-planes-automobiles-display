@@ -56,11 +56,17 @@ def test_intermission_enforces_two_second_floor(target_mode: str) -> None:
     assert intermission_is_complete(state, 12.0, 0.0, False)
 
 
-def test_intermission_duration_overrides_two_second_floor() -> None:
-    state = IntermissionState(target_mode="adsb-records", started_at=10.0)
+@pytest.mark.parametrize(
+    "target_mode",
+    ("train", "adsb", "adsb-records", "plane-alert"),
+)
+def test_configured_intermission_duration_applies_to_every_mode(
+    target_mode: str,
+) -> None:
+    state = IntermissionState(target_mode=target_mode, started_at=10.0)
 
-    assert not intermission_is_complete(state, 13.4, 3.5, False)
-    assert intermission_is_complete(state, 13.5, 3.5, False)
+    assert not intermission_is_complete(state, 13.9, 4.0, False)
+    assert intermission_is_complete(state, 14.0, 4.0, False)
 
 
 def test_parse_modes_respects_explicit_adsb_only_mode():
