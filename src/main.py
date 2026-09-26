@@ -509,7 +509,8 @@ def loadPlaneAlertData(planeAlertConfig: dict[str, Any]):
         return False
 
 
-def loadAdsbData(adsbConfig):
+def loadAdsbData(adsbConfig: dict[str, Any]) -> list[AdsbAircraft] | bool:
+    """Fetch live ADS-B aircraft and persist record observations."""
     if not adsbConfig["enabled"]:
         return False
     if adsbConfig["homeLat"] is None or adsbConfig["homeLon"] is None:
@@ -568,9 +569,25 @@ def loadAdsbData(adsbConfig):
 
 
 def loadAdsbRecordsData(adsbConfig: dict[str, Any]) -> list[AdsbRecordBoard] | bool:
-    """Load persisted ADS-B record boards for display."""
+    """Refresh ADS-B observations, then load persisted record boards.
+
+    ADS-B records/statistics may be configured without the live ADS-B display
+    mode. Refreshing here makes observation collection independent of display
+    mode ordering and guarantees that the subsequent store read happens after
+    the write completes.
+    """
     if not adsbConfig["enabled"]:
         return False
+
+    aircraft = loadAdsbData(adsbConfig)
+    if aircraft is False:
+        print("Warning: Showing cached ADS-B records after refresh failure")
+    elif not aircraft:
+        print(
+            "Warning: ADS-B source returned no aircraft matching the configured "
+            "position, age, distance, and altitude filters"
+        )
+
     try:
         boards = load_adsb_record_boards(Path(adsbConfig["recordsStorePath"]))
         return filter_record_boards(boards, adsbConfig["recordsWindows"])
@@ -1634,8 +1651,6 @@ try:
         modeState.active_mode,
         config["transport"]["fallbackMode"],
     }
-    if "adsb-records" in initial_refresh_modes:
-        initial_refresh_modes.add("adsb")
     for cache_mode in initial_refresh_modes:
         if cache_mode in displayCaches:
             displayCaches[cache_mode].refresh_if_due(time.monotonic(), force=True)
