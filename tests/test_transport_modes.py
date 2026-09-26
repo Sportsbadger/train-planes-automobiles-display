@@ -45,10 +45,28 @@ def test_intermission_waits_for_minimum_duration_and_refresh() -> None:
     assert intermission_is_complete(state, 12.0, 2.0, False)
 
 
-def test_intermission_allows_zero_minimum_duration() -> None:
-    state = IntermissionState(target_mode="train", started_at=10.0)
+@pytest.mark.parametrize(
+    "target_mode",
+    ("train", "adsb", "adsb-records", "plane-alert"),
+)
+def test_intermission_enforces_two_second_floor(target_mode: str) -> None:
+    state = IntermissionState(target_mode=target_mode, started_at=10.0)
 
-    assert intermission_is_complete(state, 10.0, 0.0, False)
+    assert not intermission_is_complete(state, 11.9, 0.0, False)
+    assert intermission_is_complete(state, 12.0, 0.0, False)
+
+
+@pytest.mark.parametrize(
+    "target_mode",
+    ("train", "adsb", "adsb-records", "plane-alert"),
+)
+def test_configured_intermission_duration_applies_to_every_mode(
+    target_mode: str,
+) -> None:
+    state = IntermissionState(target_mode=target_mode, started_at=10.0)
+
+    assert not intermission_is_complete(state, 13.9, 4.0, False)
+    assert intermission_is_complete(state, 14.0, 4.0, False)
 
 
 def test_parse_modes_respects_explicit_adsb_only_mode():

@@ -11,6 +11,7 @@ TRANSITION_IMAGE_NAMES = {
     "adsb-records": "adsb-records.xbm",
     "plane-alert": "plane-alert.xbm",
 }
+MINIMUM_INTERMISSION_DURATION_S = 2.0
 
 
 @dataclass
@@ -65,7 +66,11 @@ def intermission_is_complete(
         ``True`` once the minimum display time and target refresh are complete.
     """
     elapsed_s = now - state.started_at
-    return elapsed_s >= max(0.0, minimum_duration_s) and not data_is_refreshing
+    effective_duration_s = max(
+        MINIMUM_INTERMISSION_DURATION_S,
+        minimum_duration_s,
+    )
+    return elapsed_s >= effective_duration_s and not data_is_refreshing
 
 
 def parse_modes(
