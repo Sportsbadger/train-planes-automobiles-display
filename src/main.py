@@ -1,6 +1,5 @@
 import os
 import time
-from pathlib import Path
 
 import requests
 
@@ -56,7 +55,6 @@ from transport_modes import (
     intermission_is_complete,
     mode_run_duration_s,
     parse_modes,
-    transition_image_name,
     aligned_mode_switch_interval_s,
     update_mode_state,
 )
@@ -701,14 +699,9 @@ def drawIntermission(
     target_mode: str,
 ) -> Any:
     """Build a static intermode screen while target data is refreshed."""
-    image_path = (
-        Path(__file__).resolve().parent
-        / "images"
-        / "transitions"
-        / transition_image_name(target_mode)
-    )
-    with Image.open(image_path) as source_image:
-        transition_image = source_image.convert("1").copy()
+    transition_image = load_mode_image(target_mode)
+    if transition_image is None:
+        raise ValueError(f"Unsupported transport mode: {target_mode}")
 
     display_device.clear()
     virtual_viewport = viewport(display_device, width=width, height=height)

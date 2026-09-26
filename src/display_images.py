@@ -6,12 +6,14 @@ from PIL import Image
 
 
 DISPLAY_SIZE: Final[tuple[int, int]] = (256, 64)
-IMAGE_DIRECTORY: Final[Path] = Path(__file__).resolve().parent / "images"
+IMAGE_DIRECTORY: Final[Path] = (
+    Path(__file__).resolve().parent / "images" / "transitions"
+)
 MODE_IMAGE_FILES: Final[dict[str, str]] = {
-    "train": "train-intermission.pbm",
-    "adsb": "adsb-intermission.pbm",
-    "adsb-records": "adsb-records-intermission.pbm",
-    "plane-alert": "plane-alert-intermission.pbm",
+    "train": "train.xbm",
+    "adsb": "adsb.xbm",
+    "adsb-records": "adsb-records.xbm",
+    "plane-alert": "plane-alert.xbm",
 }
 
 
