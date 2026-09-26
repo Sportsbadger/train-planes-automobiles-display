@@ -568,9 +568,19 @@ def loadAdsbData(adsbConfig):
 
 
 def loadAdsbRecordsData(adsbConfig: dict[str, Any]) -> list[AdsbRecordBoard] | bool:
-    """Load persisted ADS-B record boards for display."""
+    """Refresh ADS-B observations and load their persisted record boards.
+
+    The records mode cannot rely on the live ADS-B mode having run first. A
+    records-only configuration otherwise repeatedly reads an empty store while
+    displaying a perpetual loading/collection state.
+    """
     if not adsbConfig["enabled"]:
         return False
+
+    # Refresh through the same loader as the live board so records-only mode
+    # both fetches the source and persists observations before reading boards.
+    # Existing records remain displayable when a transient source failure occurs.
+    loadAdsbData(adsbConfig)
     try:
         boards = load_adsb_record_boards(Path(adsbConfig["recordsStorePath"]))
         return filter_record_boards(boards, adsbConfig["recordsWindows"])
@@ -1634,8 +1644,6 @@ try:
         modeState.active_mode,
         config["transport"]["fallbackMode"],
     }
-    if "adsb-records" in initial_refresh_modes:
-        initial_refresh_modes.add("adsb")
     for cache_mode in initial_refresh_modes:
         if cache_mode in displayCaches:
             displayCaches[cache_mode].refresh_if_due(time.monotonic(), force=True)

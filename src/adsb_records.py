@@ -4,6 +4,7 @@ import json
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from adsb import AdsbAircraft, format_altitude, format_speed
@@ -15,6 +16,7 @@ DAY_SECONDS = 24 * 60 * 60
 WEEK_SECONDS = 7 * DAY_SECONDS
 CURRENT_STORE_VERSION = 1
 DEFAULT_RECORD_WINDOWS: tuple[RecordWindow, ...] = ("day", "week", "forever")
+_STORE_LOCK = RLock()
 
 
 @dataclass(frozen=True)
@@ -198,27 +200,28 @@ def update_adsb_record_store(
         AdsbRecordStoreError: If the existing store is malformed.
     """
     timestamp = time.time() if now is None else now
-    store = _load_store(store_path)
-    observations = _read_observations(store)
-    observations.extend(
-        aircraft_to_observation(aircraft_item, timestamp)
-        for aircraft_item in aircraft
-    )
-    observations = prune_observations(observations, timestamp)
+    with _STORE_LOCK:
+        store = _load_store(store_path)
+        observations = _read_observations(store)
+        observations.extend(
+            aircraft_to_observation(aircraft_item, timestamp)
+            for aircraft_item in aircraft
+        )
+        observations = prune_observations(observations, timestamp)
 
-    forever_records = _read_forever_records(store)
-    forever_records = merge_forever_records(forever_records, observations)
+        forever_records = _read_forever_records(store)
+        forever_records = merge_forever_records(forever_records, observations)
 
-    _write_store(
-        store_path,
-        {
-            "version": CURRENT_STORE_VERSION,
-            "observations": [asdict(item) for item in observations],
-            "forever": {
-                key: asdict(value) for key, value in forever_records.items()
+        _write_store(
+            store_path,
+            {
+                "version": CURRENT_STORE_VERSION,
+                "observations": [asdict(item) for item in observations],
+                "forever": {
+                    key: asdict(value) for key, value in forever_records.items()
+                },
             },
-        },
-    )
+        )
     return build_record_boards(observations, forever_records, timestamp)
 
 
@@ -239,9 +242,10 @@ def load_adsb_record_boards(
         AdsbRecordStoreError: If the existing store is malformed.
     """
     timestamp = time.time() if now is None else now
-    store = _load_store(store_path)
-    observations = prune_observations(_read_observations(store), timestamp)
-    forever_records = _read_forever_records(store)
+    with _STORE_LOCK:
+        store = _load_store(store_path)
+        observations = prune_observations(_read_observations(store), timestamp)
+        forever_records = _read_forever_records(store)
     return build_record_boards(observations, forever_records, timestamp)
 
 
