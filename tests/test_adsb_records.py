@@ -1,5 +1,7 @@
+import json
 from pathlib import Path
 import sys
+import time
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT / "src"))
@@ -7,13 +9,17 @@ sys.path.append(str(PROJECT_ROOT / "src"))
 from adsb import AdsbAircraft  # noqa: E402
 from adsb_records import (  # noqa: E402
     AdsbRecordBoard,
+    AdsbRecordObservation,
     AdsbMetricRecord,
+    build_record_boards,
     build_record_summary_text,
     filter_record_boards,
     load_adsb_record_boards,
+    merge_forever_records,
     normalize_record_windows,
     record_mode_entry_count,
     select_record_display_page,
+    sample_observations,
     trim_adsb_record_store,
     update_adsb_record_store,
 )
@@ -223,3 +229,150 @@ def test_trim_adsb_record_store_dry_run_does_not_write(tmp_path):
         for board in boards
         for record in board.records
     )
+
+
+def observation(
+    timestamp: float,
+    *,
+    hex_value: str = "abc123",
+    altitude: int = 10_000,
+    speed: int = 200,
+    distance: float = 10.0,
+    vertical_rate: int = 0,
+) -> AdsbRecordObservation:
+    return AdsbRecordObservation(
+        timestamp=timestamp,
+        hex=hex_value,
+        label=hex_value.upper(),
+        aircraft_type="A320",
+        altitude_ft=altitude,
+        speed_kt=speed,
+        distance_nm=distance,
+        vertical_rate_fpm=vertical_rate,
+    )
+
+
+def test_sampling_deduplicates_sightings_but_preserves_metric_extrema():
+    sightings = [
+        observation(100, altitude=10_000, speed=300, vertical_rate=-500),
+        observation(101, altitude=20_000, speed=200, vertical_rate=800),
+        observation(101, altitude=20_000, speed=200, vertical_rate=800),
+    ]
+
+    sampled = sample_observations(sightings, bucket_seconds=300)
+
+    assert len(sampled) == 2
+    assert {item.altitude_ft for item in sampled} == {10_000, 20_000}
+    assert {item.speed_kt for item in sampled} == {200, 300}
+    assert {item.vertical_rate_fpm for item in sampled} == {-500, 800}
+
+
+def test_sampling_separates_aircraft_and_bucket_boundaries():
+    sightings = [
+        observation(299, altitude=10_000),
+        observation(300, altitude=20_000),
+        observation(301, hex_value="def456", altitude=30_000),
+    ]
+
+    sampled = sample_observations(sightings, bucket_seconds=300)
+
+    assert len(sampled) == 3
+
+
+def test_store_migrates_legacy_schema_atomically(tmp_path):
+    store_path = tmp_path / "records.json"
+    legacy = {
+        "version": 1,
+        "observations": [
+            {
+                "timestamp": 1_000.0,
+                "hex": "abc123",
+                "label": "LEGACY",
+                "aircraft_type": "A320",
+                "altitude_ft": 20_000,
+                "speed_kt": 300,
+                "distance_nm": 12.0,
+                "vertical_rate_fpm": 0,
+            }
+        ],
+        "forever": {},
+    }
+    store_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    update_adsb_record_store(store_path, [], now=1_000.0)
+
+    migrated = json.loads(store_path.read_text(encoding="utf-8"))
+    assert migrated["version"] == 2
+    assert migrated["policy"] == {"bucket_seconds": 300}
+    assert migrated["observations"] == legacy["observations"]
+    assert not store_path.with_suffix(".json.tmp").exists()
+
+
+def test_sampling_matches_unsampled_metric_results(tmp_path):
+    sightings = [
+        aircraft("abc123", "ONE", 1_000, 400, 30.0, -900),
+        aircraft("abc123", "ONE", 40_000, 100, 2.0, 1_200),
+    ]
+
+    boards = update_adsb_record_store(
+        tmp_path / "records.json",
+        sightings,
+        now=10_000.0,
+    )
+    values = {record.metric: record.value for record in boards[0].records}
+
+    assert values == {
+        "highest": 40_000,
+        "lowest": 1_000,
+        "fastest": 400,
+        "slowest": 100,
+        "furthest": 30.0,
+        "nearest": 2.0,
+        "climb": 1_200,
+        "descent": -900,
+    }
+
+
+def test_store_growth_is_bounded_across_many_refreshes(tmp_path):
+    store_path = tmp_path / "records.json"
+    start = 1_000_000.0
+    bucket_seconds = 60 * 60
+    for refresh in range(190):
+        update_adsb_record_store(
+            store_path,
+            [aircraft("abc123", "ONE", refresh, refresh, float(refresh))],
+            now=start + (refresh * bucket_seconds),
+            bucket_seconds=bucket_seconds,
+        )
+
+    payload = json.loads(store_path.read_text(encoding="utf-8"))
+    maximum_buckets = (7 * 24 * 60 * 60 // bucket_seconds) + 1
+    assert len(payload["observations"]) <= maximum_buckets * 8
+
+
+def test_large_synthetic_week_sampling_and_board_build_is_linear():
+    now = 2_000_000.0
+    sightings = [
+        observation(
+            now - (index % (7 * 24 * 60 * 60)),
+            hex_value=f"{index % 250:06x}",
+            altitude=index % 45_000,
+            speed=index % 600,
+            distance=float(index % 100),
+            vertical_rate=(index % 4_000) - 2_000,
+        )
+        for index in range(50_000)
+    ]
+
+    started = time.perf_counter()
+    sampled = sample_observations(sightings)
+    boards = build_record_boards(
+        sampled,
+        merge_forever_records({}, sightings),
+        now,
+    )
+    elapsed = time.perf_counter() - started
+
+    assert len(boards) == 3
+    assert len(sampled) <= 250 * ((7 * 24 * 60 * 60 // 300) + 1) * 8
+    assert elapsed < 5.0
