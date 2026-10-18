@@ -13,7 +13,8 @@ MetricDirection = Literal["max", "min"]
 
 DAY_SECONDS = 24 * 60 * 60
 WEEK_SECONDS = 7 * DAY_SECONDS
-CURRENT_STORE_VERSION = 1
+CURRENT_STORE_VERSION = 3
+DEFAULT_OBSERVATION_BUCKET_SECONDS = 5 * 60
 DEFAULT_RECORD_WINDOWS: tuple[RecordWindow, ...] = ("day", "week", "forever")
 
 
@@ -183,6 +184,7 @@ def update_adsb_record_store(
     store_path: Path,
     aircraft: Iterable[AdsbAircraft],
     now: float | None = None,
+    bucket_seconds: int = DEFAULT_OBSERVATION_BUCKET_SECONDS,
 ) -> list[AdsbRecordBoard]:
     """Persist aircraft observations and return updated record boards.
 
@@ -190,6 +192,8 @@ def update_adsb_record_store(
         store_path: JSON file used for durable ADS-B record storage.
         aircraft: ADS-B aircraft observations to add to the store.
         now: Optional Unix timestamp, primarily for tests.
+        bucket_seconds: Sampling bucket width. Within each bucket, only
+            observations that are extrema for at least one metric persist.
 
     Returns:
         Display-ready record boards for day, week, and forever windows.
@@ -197,29 +201,50 @@ def update_adsb_record_store(
     Raises:
         AdsbRecordStoreError: If the existing store is malformed.
     """
+    if bucket_seconds <= 0:
+        raise ValueError("bucket_seconds must be positive")
+
     timestamp = time.time() if now is None else now
     store = _load_store(store_path)
-    observations = _read_observations(store)
-    observations.extend(
-        aircraft_to_observation(aircraft_item, timestamp)
-        for aircraft_item in aircraft
+    stored_observations = _read_observations(store)
+    new_observations = list(
+        dict.fromkeys(
+            aircraft_to_observation(aircraft_item, timestamp)
+            for aircraft_item in aircraft
+        )
+    )
+    observations = sample_observations(
+        [*stored_observations, *new_observations],
+        bucket_seconds,
     )
     observations = prune_observations(observations, timestamp)
 
     forever_records = _read_forever_records(store)
-    forever_records = merge_forever_records(forever_records, observations)
-
-    _write_store(
-        store_path,
-        {
-            "version": CURRENT_STORE_VERSION,
-            "observations": [asdict(item) for item in observations],
-            "forever": {
-                key: asdict(value) for key, value in forever_records.items()
-            },
-        },
+    updated_forever_records = merge_forever_records(
+        forever_records,
+        new_observations,
     )
-    return build_record_boards(observations, forever_records, timestamp)
+
+    persisted_changed = (
+        store.get("version") != CURRENT_STORE_VERSION
+        or store.get("policy") != {"bucket_seconds": bucket_seconds}
+        or observations != stored_observations
+        or updated_forever_records != forever_records
+    )
+    if persisted_changed:
+        _write_store(
+            store_path,
+            {
+                "version": CURRENT_STORE_VERSION,
+                "policy": {"bucket_seconds": bucket_seconds},
+                "observations": [asdict(item) for item in observations],
+                "forever": {
+                    key: asdict(value)
+                    for key, value in updated_forever_records.items()
+                },
+            },
+        )
+    return build_record_boards(observations, updated_forever_records, timestamp)
 
 
 def load_adsb_record_boards(
@@ -347,14 +372,58 @@ def prune_observations(
     )
 
 
+def sample_observations(
+    observations: Iterable[AdsbRecordObservation],
+    bucket_seconds: int = DEFAULT_OBSERVATION_BUCKET_SECONDS,
+) -> list[AdsbRecordObservation]:
+    """Retain global metric extrema for each time bucket.
+
+    At most one source observation per metric is retained for each bucket. An
+    observation that wins multiple metrics is stored once, bounding the whole
+    rolling store at ``len(METRIC_DEFINITIONS)`` observations per bucket while
+    preserving every day/week metric candidate. Aircraft-level buckets are
+    intentionally avoided: their cardinality made record-mode startup depend
+    on the number of aircraft seen during the week.
+
+    Args:
+        observations: Observations to sample.
+        bucket_seconds: Positive sampling bucket width in seconds.
+
+    Returns:
+        Sampled observations ordered newest first.
+
+    Raises:
+        ValueError: If ``bucket_seconds`` is not positive.
+    """
+    if bucket_seconds <= 0:
+        raise ValueError("bucket_seconds must be positive")
+
+    groups: dict[int, list[AdsbRecordObservation]] = {}
+    for observation in observations:
+        bucket = int(observation.timestamp // bucket_seconds)
+        groups.setdefault(bucket, []).append(observation)
+
+    retained: list[AdsbRecordObservation] = []
+    for group in groups.values():
+        winner_ids = _metric_winner_ids(group)
+        retained.extend(
+            observation
+            for observation in group
+            if id(observation) in winner_ids
+        )
+    unique_retained = list(dict.fromkeys(retained))
+    return sorted(unique_retained, key=lambda item: item.timestamp, reverse=True)
+
+
 def merge_forever_records(
     existing: Mapping[str, AdsbMetricRecord],
     observations: Iterable[AdsbRecordObservation],
 ) -> dict[str, AdsbMetricRecord]:
     """Merge new observations into durable all-time metric records."""
     merged = dict(existing)
+    candidates = _accumulate_metric_records(observations)
     for definition in METRIC_DEFINITIONS:
-        candidate = _best_metric_record(observations, definition)
+        candidate = candidates.get(definition.key)
         if candidate is None:
             continue
         current = merged.get(definition.key)
@@ -521,12 +590,7 @@ def _build_rolling_board(
     cutoff: float,
 ) -> AdsbRecordBoard:
     window_observations = [item for item in observations if item.timestamp >= cutoff]
-    records = [
-        record
-        for definition in METRIC_DEFINITIONS
-        for record in [_best_metric_record(window_observations, definition)]
-        if record is not None
-    ]
+    records = _ordered_records(_accumulate_metric_records(window_observations))
     return AdsbRecordBoard(
         window=window,
         title=WINDOW_TITLES[window],
@@ -545,33 +609,55 @@ def _ordered_records(
     ]
 
 
-def _best_metric_record(
+def _accumulate_metric_records(
     observations: Iterable[AdsbRecordObservation],
-    definition: MetricDefinition,
-) -> AdsbMetricRecord | None:
-    best: AdsbRecordObservation | None = None
-    best_value: float | None = None
+) -> dict[str, AdsbMetricRecord]:
+    """Evaluate all metric definitions in one pass over observations."""
+    records: dict[str, AdsbMetricRecord] = {}
     for observation in observations:
-        raw_value = getattr(observation, definition.field)
-        if raw_value is None:
-            continue
-        value = float(raw_value)
-        if not _metric_value_allowed(value, definition):
-            continue
-        if best_value is None or _is_better(value, best_value, definition):
-            best = observation
-            best_value = value
-    if best is None or best_value is None:
-        return None
-    return AdsbMetricRecord(
-        metric=definition.key,
-        label=definition.label,
-        value=best_value,
-        unit=definition.unit,
-        aircraft_label=best.label,
-        aircraft_type=best.aircraft_type,
-        timestamp=best.timestamp,
-    )
+        for definition in METRIC_DEFINITIONS:
+            raw_value = getattr(observation, definition.field)
+            if raw_value is None:
+                continue
+            value = float(raw_value)
+            if not _metric_value_allowed(value, definition):
+                continue
+            current = records.get(definition.key)
+            if current is not None and not _is_better(
+                value,
+                current.value,
+                definition,
+            ):
+                continue
+            records[definition.key] = AdsbMetricRecord(
+                metric=definition.key,
+                label=definition.label,
+                value=value,
+                unit=definition.unit,
+                aircraft_label=observation.label,
+                aircraft_type=observation.aircraft_type,
+                timestamp=observation.timestamp,
+            )
+    return records
+
+
+def _metric_winner_ids(
+    observations: Iterable[AdsbRecordObservation],
+) -> set[int]:
+    """Return identities of observations winning any configured metric."""
+    winners: dict[str, tuple[float, AdsbRecordObservation]] = {}
+    for observation in observations:
+        for definition in METRIC_DEFINITIONS:
+            raw_value = getattr(observation, definition.field)
+            if raw_value is None:
+                continue
+            value = float(raw_value)
+            if not _metric_value_allowed(value, definition):
+                continue
+            current = winners.get(definition.key)
+            if current is None or _is_better(value, current[0], definition):
+                winners[definition.key] = (value, observation)
+    return {id(observation) for _value, observation in winners.values()}
 
 
 def _metric_value_allowed(value: float, definition: MetricDefinition) -> bool:
