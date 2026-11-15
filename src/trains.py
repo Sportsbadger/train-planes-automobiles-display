@@ -229,7 +229,9 @@ def loadDeparturesForStation(journeyConfig, apiKey, rows):
     headers = {'Content-Type': 'text/xml'}
     apiURL = "https://lite.realtime.nationalrail.co.uk/OpenLDBWS/ldb11.asmx"
 
-    APIOut = requests.post(apiURL, data=APIRequest, headers=headers).text
+    # Bound both connection and response waits so a stalled railway API cannot
+    # leave the background refresh running indefinitely.
+    APIOut = requests.post(apiURL, data=APIRequest, headers=headers, timeout=(5, 15)).text
 
     Departures, departureStationName = ProcessDepartures(journeyConfig, APIOut)
 
