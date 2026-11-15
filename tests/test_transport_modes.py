@@ -49,6 +49,14 @@ def test_intermission_waits_for_minimum_duration_and_refresh() -> None:
     assert intermission_is_complete(state, 12.0, 2.0, False)
 
 
+def test_stalled_refresh_cannot_hold_transition_forever() -> None:
+    state = TransitionState(target_mode="train", requested_at=9.0)
+    mark_transition_visible(state, 10.0)
+
+    assert not transition_is_complete(state, 39.9, 2.0, True)
+    assert transition_is_complete(state, 40.0, 2.0, True)
+
+
 @pytest.mark.parametrize(
     "target_mode",
     ("train", "adsb", "adsb-records", "plane-alert"),
