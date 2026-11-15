@@ -12,6 +12,7 @@ TRANSITION_IMAGE_NAMES = {
     "plane-alert": "plane-alert.xbm",
 }
 MINIMUM_INTERMISSION_DURATION_S = 2.0
+MAXIMUM_REFRESH_WAIT_S = 30.0
 
 
 @dataclass
@@ -84,7 +85,8 @@ def transition_is_complete(
         data_is_refreshing: Whether the target mode still has an active load.
 
     Returns:
-        ``True`` once the minimum display time and target refresh are complete.
+        ``True`` once the minimum display time has elapsed and either the
+        refresh finishes or its maximum wait expires.
     """
     if state.visible_since is None:
         return False
@@ -94,7 +96,10 @@ def transition_is_complete(
         MINIMUM_INTERMISSION_DURATION_S,
         minimum_duration_s,
     )
-    return elapsed_s >= effective_duration_s and not data_is_refreshing
+    return elapsed_s >= effective_duration_s and (
+        not data_is_refreshing
+        or elapsed_s >= max(effective_duration_s, MAXIMUM_REFRESH_WAIT_S)
+    )
 
 
 def intermission_is_complete(
